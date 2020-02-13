@@ -277,6 +277,7 @@ repeated_passes(Opts) ->
           ?PASS(ssa_opt_tail_phis),
           ?PASS(ssa_opt_bool_bifs_to_fc),
           ?PASS(ssa_opt_sink),
+          ?PASS(ssa_opt_sink_fc_conds),
           ?PASS(ssa_opt_tuple_size),
           ?PASS(ssa_opt_record),
           ?PASS(ssa_opt_type_continue)],        %Must run after ssa_opt_dead to
@@ -2735,6 +2736,70 @@ safe_bool_bifs([#b_set{op={bif,Bif},dst=Dst,args=As}|Is], Bools) ->
 safe_bool_bifs([_|Is], Bools) ->
     safe_bool_bifs(Is, Bools).
 
+%%% Easy way do turn on/off debug printouts
+dp(_,_) ->
+    ok.
+
+%%%
+%%% WIP, will replace ssa_opt_sink when complete
+%%%
+ssa_opt_sink_fc_conds({#opt_st{ssa=Linear,cnt=Count0}=St, FuncDb}) ->
+    Blocks0 = maps:from_list(Linear),
+    Terminators =
+        maps:from_list([{C, L}
+                        || {L, #b_blk{last=#b_br{bool=C,succ=S,fail=F}}}
+                               <- Linear, S =/= F]),
+    dp("!!! Terminators: ~p~n", [Terminators]),
+    Is = get_instrs(fun(#b_set{}=I) ->
+                            beam_ssa:no_side_effect(I);
+                       (_) ->
+                            false
+                    end, Linear),
+    dp("All defs: ~p~n", [Is]),
+    VarToBlock = maps:from_list([{V, L} || {L, #b_set{dst=V}, _Idx} <- Is]),
+    dp("VarToBlock: ~p~n", [VarToBlock]),
+    %% We may want to move defs which are used by the terminator
+    PotentialMovableDefs = maps:from_list([{V, L} ||
+                                              {L, #b_set{dst=V}, _} <- Is
+                                                  ,
+                                              maps:is_key(V, Terminators)
+                                          ]),
+    dp("Movable defs: ~p~n", [PotentialMovableDefs]),
+    %% Calculate dominators.
+    {Dom,Numbering} = beam_ssa:dominators(Blocks0),
+    dp("Dom: ~p~n", [Dom]),
+    dp("Numbering: ~p~n", [Numbering]),
+
+    %% It is not safe to move get_tuple_element instructions to blocks
+    %% that begin with certain instructions. It is also unsafe to move
+    %% the instructions into any part of a receive. To avoid such
+    %% unsafe moves, pretend that the unsuitable blocks are not
+    %% dominators.
+    Unsuitable = unsuitable(Linear, Blocks0),
+
+    dp("Unsuitable: ~p~n", [gb_sets:to_list(Unsuitable)]),
+
+    Used = used_blocks(Linear, PotentialMovableDefs, []),
+    dp("Used: ~p~n", [Used]),
+
+    %% Calculate new positions for get_tuple_element instructions. The new
+    %% position is a block that dominates all uses of the variable.
+    DefLoc = new_def_locations(Used, PotentialMovableDefs, Dom, Numbering,
+                               Unsuitable),
+    dp("DefLoc: ~p~n", [DefLoc]),
+
+    %% Now move all suitable get_tuple_element instructions to their
+    %% new blocks.
+    Blocks = foldl(fun({V,To}, A) ->
+                           From = map_get(V, PotentialMovableDefs),
+                           move_defs(V, From, To, A)
+                   end, Blocks0, DefLoc),
+
+    %% XXXX Accumulate new defs from the arguments of the moved
+    %% instructions.
+
+    {St#opt_st{ssa=beam_ssa:linearize(Blocks),cnt=Count0}, FuncDb}.
+
 %%%
 %%% Common utilities.
 %%%
@@ -2792,3 +2857,18 @@ new_var(#b_var{name=Base}, Count) ->
     {#b_var{name={Base,Count}},Count+1};
 new_var(Base, Count) when is_atom(Base) ->
     {#b_var{name={Base,Count}},Count+1}.
+
+%%% Return a list of tuples {Label, Instr, Index} for which the Pred
+%%% applied to a n instruction returns true.
+get_instrs(Pred, [{L,#b_blk{is=Is}}|Bs]) ->
+    get_instrs_is(Is, L, 0, Pred, get_instrs(Pred, Bs));
+get_instrs(_, []) -> [].
+
+get_instrs_is([I|Is], L, Idx, Pred, Acc) ->
+    case Pred(I) of
+        true ->
+            get_instrs_is(Is, L, Idx + 1, Pred, [{L, I, Idx}|Acc]);
+        false ->
+            get_instrs_is(Is, L, Idx + 1, Pred, Acc)
+    end;
+get_instrs_is([], _, _, _, Acc) -> Acc.
