@@ -276,6 +276,7 @@ repeated_passes(Opts) ->
           ?PASS(ssa_opt_dead),
           ?PASS(ssa_opt_cse),
           ?PASS(ssa_opt_tail_phis),
+          ?PASS(ssa_opt_bool_bifs_to_fc),
           ?PASS(ssa_opt_sink),
           ?PASS(ssa_opt_inter_block_sink),
           ?PASS(ssa_opt_tuple_size),
@@ -2232,6 +2233,19 @@ safe_block_is([#b_set{dst=Var}=I|Is], L, Acc) ->
     end.
 
 %%%
+%%% Build a map mapping variables to the block they are defined
+%%% in and the #b_set{} that defines them..
+%%%
+block_definitions(Blocks) ->
+    F = fun(L, #b_blk{is=Is}, Acc) -> block_defs_is(Is, L, Acc) end,
+    beam_ssa:fold_rpo(F, #{}, Blocks).
+
+block_defs_is([], _, Acc) ->
+    Acc;
+block_defs_is([#b_set{dst=Var}=I|Is], L, Acc) ->
+    block_defs_is(Is, L, Acc#{Var => {L, I}}).
+
+%%%
 %%% When a tuple is matched, the pattern matching compiler generates a
 %%% get_tuple_element instruction for every tuple element that will
 %%% ever be used in the rest of the function. That often forces the
@@ -2743,6 +2757,173 @@ unfold_arg(#b_literal{val=Val}=Lit, LitMap, X) ->
         #{} -> Lit
     end;
 unfold_arg(Expr, _LitMap, _X) -> Expr.
+
+%%%
+%%% Rewrite boolean bif:'and', bif:'and' and bif:'not' to use flow
+%%% control.
+%%%
+%%% We look for basic blocks which end with a conditional branch
+%%% branching on the result of the boolean bif. We only consider bifs
+%%% which are not followed by a succeeded instruction and where the
+%%% conditional branch is the only user.
+%%
+ssa_opt_bool_bifs_to_fc({#opt_st{ssa=Linear,cnt=Count0}=St, FuncDb}) ->
+    Bools = safe_bool_bifs(Linear),
+    BlockMap = maps:from_list(Linear),
+    Uses = beam_ssa:uses(BlockMap),
+    Defs = block_definitions(BlockMap),
+    ToRewrite =
+        maps:fold(
+          fun(Var, Def, Acc) ->
+                  case Uses of
+                      #{ Var := [{_,#b_br{bool=Var,succ=S,fail=S}}]} ->
+                          Acc; % unconditional
+                      #{ Var := [{Lbl,#b_br{bool=Var}}]} ->
+                          Acc#{Var => {Lbl, Def}}; % the only user
+                      _ ->
+                          Acc
+                  end
+          end, #{}, Bools),
+    {BlockMap1,Count1} =
+        maps:fold(fun(_Var, {Lbl,{'and',Args}}, {Blocks, Count}) ->
+                          bool_and_to_fc(Lbl, Args, Blocks, Count, Uses, Defs);
+                     (_Var, {Lbl,{'or',Args}}, {Blocks, Count}) ->
+                          bool_or_to_fc(Lbl, Args, Blocks, Count, Uses, Defs);
+                     (_Var, {Lbl,{'not',Args}}, {Blocks, Count}) ->
+                          bool_not_to_fc(Lbl, Args, Blocks, Count)
+                  end,
+                  {BlockMap, Count0},
+                  ToRewrite),
+    {St#opt_st{ssa=beam_ssa:linearize(BlockMap1),cnt=Count1}, FuncDb}.
+
+bool_and_to_fc(Lbl, [A,B], Blocks, Next, Uses, Defs) ->
+    %% We rewrite:
+    %%
+    %%   Blk:
+    %%     C = 'and'(A, B)
+    %%     br C, Succ, Fail
+    %%
+    %% To:
+    %%
+    %%     br A, Next, Fail
+    %% Next:
+    %%     bc B, Succ, Fail
+    %%
+    %% If there are Phi-nodes in Succ which refer to Blk, change them
+    %% to refer to Next. If there are Phi-nodes in Fail which refer to
+    %% Blk, duplicate them for the edge from Next.
+    %%
+    #{ Lbl := Blk=#b_blk{last=Br=#b_br{succ=Succ,fail=Fail}}} = Blocks,
+
+    %% Push down the def of the RHS if the bool op is the only user
+    %% and the def is in the same block as the bool op. As
+    %% ssa_opt_inter_block_sink does not touch anything inside a
+    %% receive this is necessary in order to turn some bifs into
+    %% tests.
+    {RHSIs, RHSBlock, RHSBool} = push_down_rhs_def(B, Lbl, Next, Uses, Defs),
+    Blocks1 =
+        Blocks#{Lbl => Blk#b_blk{last=Br#b_br{bool=A,succ=RHSBlock,fail=Fail}},
+                RHSBlock => #b_blk{is=RHSIs,
+                                   last=#b_br{bool=RHSBool,
+                                              succ=Succ,fail=Fail}}},
+    Blocks2 = beam_ssa:copy_phi_values(
+               Lbl, Succ, RHSBlock,
+                beam_ssa:update_phi_labels([Succ], Lbl, RHSBlock, Blocks1)),
+    {Blocks2, RHSBlock + 1}.
+
+bool_or_to_fc(Lbl, [A,B], Blocks, Next, Uses, Defs) ->
+    %% We rewrite:
+    %%
+    %%   Blk:
+    %%     C = 'or'(A, B)
+    %%     br C, Succ, Fail
+    %%
+    %% To:
+    %%
+    %%     br A, Succ, Next
+    %%   Next:
+    %%     bc B, Succ, Fail
+    %%
+    %% If there are Phi-nodes in Fail which refer to Blk, change them
+    %% to refer to Next. If there are Phi-nodes in Succ which refer to
+    %% Blk, duplicate them for the edge from Next.
+    %%
+    #{ Lbl := Blk=#b_blk{last=Br=#b_br{succ=Succ,fail=Fail}}} = Blocks,
+
+    %% Push down the def of the RHS if the bool op is the only user
+    %% and the def is in the same block as the bool op. As
+    %% ssa_opt_inter_block_sink does not touch anything inside a
+    %% receive this is necessary in order to turn some bifs into
+    %% tests.
+    {RHSIs, RHSBlock, RHSBool} = push_down_rhs_def(B, Lbl, Next, Uses, Defs),
+    Blocks1 =
+        Blocks#{Lbl => Blk#b_blk{last=Br#b_br{bool=A,succ=Succ,fail=RHSBlock}},
+                RHSBlock => #b_blk{is=RHSIs,
+                                   last=#b_br{bool=RHSBool,
+                                              succ=Succ,fail=Fail}}},
+    Blocks2 = beam_ssa:copy_phi_values(
+                Lbl, Fail, RHSBlock,
+                beam_ssa:update_phi_labels([Fail], Lbl, RHSBlock, Blocks1)),
+    {Blocks2, RHSBlock + 1}.
+
+push_down_rhs_def(RHS, BlockLabel, Counter, Uses, Defs) ->
+    case Uses of
+        #{RHS := [{BlockLabel,_}] } ->
+            %% There is a single use of the RHS
+            case maps:get(RHS, Defs, false) of
+                {_, #b_set{op=phi}} ->
+                    {[], Counter, RHS};
+                {BlockLabel, Def} ->
+                    %% TODO: Can this be relaxed?
+                    {Var, Cnt} = new_var(RHS, Counter),
+                    {[Def#b_set{dst=Var}], Cnt, Var};
+                _ ->
+                    {[], Counter, RHS}
+            end;
+        _ ->
+            {[], Counter, RHS}
+    end.
+
+bool_not_to_fc(Lbl, [A], Blocks, Count) ->
+    %% We just swap the fail and success labels
+    #{ Lbl := Blk=#b_blk{last=Br=#b_br{succ=Succ,fail=Fail}}} = Blocks,
+    {Blocks#{Lbl => Blk#b_blk{last=Br#b_br{bool=A,succ=Fail,fail=Succ}}},
+     Count}.
+
+%%%
+%%% Given a function, return a list of safe (i.e. not followed by a
+%%% succeeded instruction) bif:'and', bif:'or' and bif:'not' defs.
+%%%
+-spec safe_bool_bifs([{beam_ssa:label(),beam_ssa:b_blk()}]) ->
+          #{ beam_ssa:b_var() => {'and' | 'or' | 'not', [beam_ssa:argument()]}}.
+safe_bool_bifs(Linear) ->
+    foldl(fun({_Lbl,#b_blk{is=Is}}, Bools1) ->
+                  safe_bool_bifs(Is, Bools1)
+          end, #{}, Linear).
+
+safe_bool_bifs([], Bools) ->
+    Bools;
+safe_bool_bifs([_,#b_set{op=succeeded}|Is], Bools) ->
+    safe_bool_bifs(Is, Bools);
+safe_bool_bifs([#b_set{op={bif,'=:='},
+                       dst=Dst,args=[A,#b_literal{val=true}]}|Is], Bools) ->
+    case Bools of
+        #{ A := {Op,As} } ->
+            %% Short circuit if we know that this comparison tests the
+            %% result of a known safe boolean bif.
+            safe_bool_bifs(Is, Bools#{Dst => {Op,As}});
+        _ ->
+            safe_bool_bifs(Is, Bools)
+    end;
+safe_bool_bifs([#b_set{op={bif,Bif},dst=Dst,args=As}|Is], Bools) ->
+    case Bif of
+        'and' -> safe_bool_bifs(Is, Bools#{Dst => {Bif,As}});
+        'or'  -> safe_bool_bifs(Is, Bools#{Dst => {Bif,As}});
+        'not' -> safe_bool_bifs(Is, Bools#{Dst => {Bif,As}});
+        _     -> safe_bool_bifs(Is, Bools)
+    end;
+safe_bool_bifs([_|Is], Bools) ->
+    safe_bool_bifs(Is, Bools).
 
 %%%
 %%% Common utilities.
