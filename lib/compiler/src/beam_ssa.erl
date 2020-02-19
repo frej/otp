@@ -21,7 +21,9 @@
 
 -module(beam_ssa).
 -export([add_anno/3,get_anno/2,get_anno/3,
-         clobbers_xregs/1,def/2,def_unused/3,
+         clobbers_xregs/1,
+         copy_phi_values/4,
+         def/2, def_unused/3,
          definitions/1,
          dominators/1,common_dominators/3,
          flatmapfold_instrs_rpo/4,
@@ -644,6 +646,79 @@ fold_uses_block(Lbl, #b_blk{is=Is,last=Last}, UseMap0) ->
 merge_blocks(Blocks) ->
     Preds = predecessors(Blocks),
     merge_blocks_1(rpo(Blocks), Preds, Blocks).
+
+%%%
+%%% If there are Phi-nodes which receives values from Predecessor in
+%%% Successor, add duplicates of those values as coming from New.
+%%%
+%%% Consider the following example:
+%%%
+%%% Predecessor:
+%%%   ...
+%%%   br Successor
+%%%
+%%% Successor:
+%%%   x = phi(x0: Predecessor, ...)
+%%%
+%%% If we insert a New as an alternative extended path from
+%%% Predecessor to Successor:
+%%%
+%%% Predecessor:
+%%%   ...
+%%%   br <cond>, Successor, New
+%%%
+%%% Successor:
+%%%   x = phi(x0:Predecessor ...)
+%%%
+%%% New:
+%%%   ...
+%%%   br Successor
+%%%
+%%% We have to provide a value for x, for the case when we come from New,
+%%% a call to copy_phi_values(Predecessor, Successor, New, ...) will give us:
+%%%
+%%% Predecessor:
+%%%   ...
+%%%   br <cond>, Successor, New
+%%%
+%%% Successor:
+%%%   x = phi(x0:Predecessor, x0:New, ...)
+%%%   ...
+%%%
+%%% New:
+%%%   ...
+%%%   br Successor
+%%%
+-spec copy_phi_values(Predecessor, Successor, New, Blocks0) -> Blocks when
+      Predecessor :: label(),
+      Successor :: label(),
+      New :: label(),
+      Blocks0 :: block_map(),
+      Blocks :: block_map().
+
+copy_phi_values(Predecessor, Successor, New, Blocks0) ->
+    case Blocks0 of
+        #{Successor:=#b_blk{is=[#b_set{op=phi}|_]=Is0}=Blk0} ->
+            Is = copy_phi_values_is(Is0, Predecessor, New),
+            Blk = Blk0#b_blk{is=Is},
+            Blocks0#{Successor:=Blk};
+        #{Successor:=#b_blk{}} ->
+            %% No phi nodes in this block.
+            Blocks0
+    end.
+
+copy_phi_values_is([#b_set{op=phi,args=Args0}=I0|Is], Old, New) ->
+    Args = duplicate_phi_args(Args0, Old, New),
+    I = I0#b_set{args=Args},
+    [I|copy_phi_values_is(Is, Old, New)];
+copy_phi_values_is(Is, _, _) -> Is.
+
+duplicate_phi_args([], _Old, _New) ->
+    [];
+duplicate_phi_args([{Arg, Old}|As], Old, New) ->
+    [{Arg,Old},{Arg, New}|duplicate_phi_args(As, Old, New)];
+duplicate_phi_args([A|As], Old, New) ->
+    [A|duplicate_phi_args(As, Old, New)].
 
 %%%
 %%% Internal functions.
