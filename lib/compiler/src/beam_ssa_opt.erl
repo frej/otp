@@ -278,6 +278,7 @@ repeated_passes(Opts) ->
           ?PASS(ssa_opt_cse),
           ?PASS(ssa_opt_tail_phis),
           ?PASS(ssa_opt_sink),
+          ?PASS(ssa_opt_inter_block_sink),
           ?PASS(ssa_opt_tuple_size),
           ?PASS(ssa_opt_record),
           ?PASS(ssa_opt_type_continue)],        %Must run after ssa_opt_dead to
@@ -2262,6 +2263,154 @@ is_merge_allowed_1(L, #b_blk{last=#b_br{}}=Blk, #b_blk{is=Is}) ->
     end;
 is_merge_allowed_1(_, #b_blk{last=#b_switch{}}, #b_blk{}) ->
     false.
+
+%%%
+%%% Sometimes values are defined long before their use, this pass
+%%% tries to aggressively sink them to the basic block which dominates
+%%% all uses. This transform is particularly useful for cleaning up
+%%% after ssa_opt_bool_bifs_to_fc. Compared to ssa_opt_sink which only
+%%% looks at get_tuple_element this pass considers any define which
+%%% can be considered safe to move.
+%%%
+ssa_opt_inter_block_sink({St, FuncDb}) ->
+    %% TODO: This could be optimized by only calculating the dominance
+    %% tree once, and updating the Used and Defs sets as we move defs.
+    case ssa_opt_inter_block_sink1({St, FuncDb}) of
+        {St,FuncDb} -> {St,FuncDb}; % Nothing changed, we are done
+        {St1,FuncDb} -> ssa_opt_inter_block_sink({St1,FuncDb})
+    end.
+
+ssa_opt_inter_block_sink1({#opt_st{ssa=Linear}=St, FuncDb}) ->
+    Blocks0 = maps:from_list(Linear),
+
+    %% Create a map with all variables mapped to the block the
+    %% variable is defined in.
+    Defs1 = safe_block_definitions(Blocks0),
+
+    %% Now find all the blocks that use the variables we just have
+    %% found. We cannot use used_blocks/3 as it considers phi uses as
+    %% being in the block where the phi is and not in the predecessor,
+    %% which is what we want when sinking defs.
+    Used1 = uses(Linear, Defs1),
+
+    %% It is not safe to move instructions to blocks that begin with
+    %% certain instructions. It is also unsafe to move the
+    %% instructions into any part of a receive. To avoid such unsafe
+    %% moves, pretend that the unsuitable blocks are not dominators.
+    Unsuitable = unsuitable(Linear, Blocks0),
+
+    %% Filter out defs which have a use in the block they are defined
+    %% in or no uses at all, as we can't gain anything from sinking
+    %% them. Also don't try to sink defs in blocks which are unsuitable
+    UsedMap = maps:from_list(Used1),
+    Defs = maps:filter(
+             fun(Var, L) ->
+                     case maps:get(Var, UsedMap, []) of
+                         [] -> false;
+                         Us -> case member(L, Us) of
+                                   true -> false;
+                                   false ->
+                                       not gb_sets:is_element(L, Unsuitable)
+                               end
+                     end
+             end, Defs1),
+
+    %% Filter out uses of non-sinkable defs
+    Used = lists:filter(fun({Var,_}) -> maps:is_key(Var, Defs) end, Used1),
+
+    %% Calculate dominators.
+    {Dom,Numbering} = beam_ssa:dominators(Blocks0),
+
+    %% Calculate new positions for the defining instructions. The new
+    %% position is a block that dominates all uses of the variable.
+    DefLoc = new_def_locations(Used, Defs, Dom, Numbering, Unsuitable),
+
+    %% Now move all suitable defining instructions to their new
+    %% blocks.
+    Blocks = foldl(fun({V,To}, A) ->
+                           From = map_get(V, Defs),
+                           move_defs(V, From, To, A)
+                   end, Blocks0, DefLoc),
+    {St#opt_st{ssa=beam_ssa:linearize(Blocks)}, FuncDb}.
+
+%%%
+%%% Build a map mapping variables to the block they are defined
+%%% in. Only instructions considered safe to move are included in the
+%%% map. Unsafe instructions are instructions with side effects, and
+%%% instructions, which if moved, will prevent common peep-hole
+%%% optimizations from triggering.
+%%%
+safe_block_definitions(Blocks) ->
+    F = fun(L, #b_blk{is=Is}, Acc) -> safe_block_is(Is, L, Acc) end,
+    beam_ssa:fold_rpo(F, #{}, Blocks).
+
+safe_block_is([], _, Acc) ->
+    Acc;
+safe_block_is([#b_set{op=bs_match}|Is], L, Acc) ->
+    safe_block_is(Is, L, Acc);
+safe_block_is([#b_set{op=bs_extract}|Is], L, Acc) ->
+    safe_block_is(Is, L, Acc);
+safe_block_is([#b_set{op=get_hd}|Is], L, Acc) ->
+    safe_block_is(Is, L, Acc);
+safe_block_is([#b_set{op=get_tl}|Is], L, Acc) ->
+    safe_block_is(Is, L, Acc);
+safe_block_is([#b_set{dst=Var}=I|Is], L, Acc) ->
+    case beam_ssa:no_side_effect(I) of
+        true -> safe_block_is(Is, L, Acc#{Var => L});
+        false -> safe_block_is(Is, L, Acc)
+    end.
+
+%%%
+%%% Produce a sorted list of tuples mapping a variable to the basic
+%%% block labels it is used in.
+%%%
+-spec uses(Linear :: [beam_ssa:b_blk()],
+           Defs :: #{ #b_var{} => beam_ssa:b_set()}) ->
+          [{#b_var{}, [beam_ssa:label()]}].
+uses(Linear, Defs) ->
+    Uses = uses(Linear, Defs, #{}),
+    lists:keysort(1, [{K, cerl_sets:to_list(V)}
+                      || {K, V} <- maps:to_list(Uses)]).
+
+uses([], _, Acc) ->
+    Acc;
+uses([{Lbl,#b_blk{is=Is,last=L}}|Linear], Defs, Acc) ->
+    uses(Linear, Defs, uses(Lbl, [L|Is], Defs, Acc)).
+
+uses(_, [], _, Acc) ->
+    Acc;
+uses(L, [I|Is], Defs, Acc) ->
+    uses(L, Is, Defs, uses_i(I, L, Defs, Acc)).
+
+uses_i(#b_set{op=phi,args=As}, _, Defs, Acc0) ->
+    foldl(fun({A,Lbl}, Acc) -> uses_args([A], Lbl, Defs, Acc) end, Acc0, As);
+uses_i(#b_set{args=As}, L, Defs, Acc) ->
+    uses_args(As, L, Defs, Acc);
+uses_i(#b_br{bool=B}, L, Defs, Acc) ->
+    uses_args([B], L, Defs, Acc);
+uses_i(#b_ret{arg=A}, L, Defs, Acc) ->
+    uses_args([A], L, Defs, Acc);
+uses_i(#b_switch{arg=A}, L, Defs, Acc) ->
+    uses_args([A], L, Defs, Acc).
+
+uses_args([], _, _, Acc) ->
+    Acc;
+uses_args([#b_var{}=V|As], L, Defs, Acc) ->
+    uses_args(As, L, Defs, uses_add_arg(V, L, Defs, Acc));
+uses_args([#b_literal{}|As], L, Defs, Acc) ->
+    uses_args(As, L, Defs, Acc);
+uses_args([#b_remote{mod=M,name=N}|As], L, Defs, Acc) ->
+    uses_args([M,N|As], L, Defs, Acc);
+uses_args([#b_local{name=N}|As], L, Defs, Acc) ->
+    uses_args([N|As], L, Defs, Acc).
+
+uses_add_arg(V, L, Defs, Acc) ->
+    case maps:is_key(V, Defs) of
+        false -> Acc;
+        true ->
+            Old = maps:get(V, Acc, cerl_sets:new()),
+            Acc#{V => cerl_sets:add_element(L, Old)}
+    end.
 
 %%%
 %%% When a tuple is matched, the pattern matching compiler generates a
