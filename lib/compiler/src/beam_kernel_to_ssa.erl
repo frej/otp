@@ -546,9 +546,34 @@ select_extract_cons(Src0, [#k_var{name=Hd},#k_var{name=Tl}], St0) ->
     {[GetHd,GetTl],St2}.
 
 guard_clause_cg(#k_guard_clause{guard=G,body=B}, Fail, St0) ->
-    {Gis,St1} = guard_cg(G, Fail, St0),
+    {Gis1,St1} = guard_cg(G, Fail, St0),
+    Gis = annotate_failure_branches(reverse(Gis1)),
     {Bis,St} = match_cg(B, Fail, St1),
     {Gis ++ Bis,St}.
+
+%%
+%% Annotate branches inside the guard code which branch on the result
+%% of a {succeed,guard} operation. The annotation uses the key
+%% 'guard_failure' with the top-level guard failure label as the
+%% value.
+%%
+annotate_failure_branches([{label,Succ}=L,
+                           #b_br{succ=Succ,fail=F,bool=Bool}=B,
+                           #b_set{dst=Bool,op={bif,'=:='},
+                                  args=[_Var,#b_literal{val=true}]}=S|Is]) ->
+    annotate_failure_branches(Is, F, [S,B,L]);
+annotate_failure_branches(Is) ->
+    reverse(Is).
+
+annotate_failure_branches([], _, Acc) ->
+    Acc;
+annotate_failure_branches([#b_br{bool=Bool}=B,
+                           #b_set{dst=Bool,op={succeeded,guard}}=S|Is],
+                          F, Acc) ->
+    annotate_failure_branches(Is, F,
+                              [S,beam_ssa:add_anno(guard_failure, F, B)|Acc]);
+annotate_failure_branches([I|Is], F, Acc) ->
+    annotate_failure_branches(Is, F, [I|Acc]).
 
 %% guard_cg(Guard, Fail, State) -> {[Ainstr],State}.
 %%  A guard is a boolean expression of tests.  Tests return true or
