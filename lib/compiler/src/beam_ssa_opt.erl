@@ -2273,7 +2273,15 @@ is_merge_allowed_1(_, #b_blk{last=#b_switch{}}, #b_blk{}) ->
 %%% looks at get_tuple_element this pass considers any define which
 %%% can be considered safe to move.
 %%%
-ssa_opt_inter_block_sink({#opt_st{ssa=Linear}=St, FuncDb}) ->
+ssa_opt_inter_block_sink({St, FuncDb}) ->
+    %% TODO: This could be optimized by only calculating the dominance
+    %% tree once, and updating the Used and Defs sets as we move defs.
+    case ssa_opt_inter_block_sink1({St, FuncDb}) of
+        {St,FuncDb} -> {St,FuncDb}; % Nothing changed, we are done
+        {St1,FuncDb} -> ssa_opt_inter_block_sink({St1,FuncDb})
+    end.
+
+ssa_opt_inter_block_sink1({#opt_st{ssa=Linear}=St, FuncDb}) ->
     Blocks0 = maps:from_list(Linear),
 
     %% Create a map with all variables mapped to the block the
