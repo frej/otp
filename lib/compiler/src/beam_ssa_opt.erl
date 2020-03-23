@@ -40,7 +40,7 @@
 -include("beam_ssa_opt.hrl").
 
 -import(lists, [all/2,append/1,duplicate/2,flatten/1,foldl/3,
-                keyfind/3,last/1,mapfoldl/3,member/2,
+                keyfind/3,last/1,map/2,mapfoldl/3,member/2,
                 partition/2,reverse/1,reverse/2,
                 splitwith/2,sort/1,takewhile/2,unzip/1]).
 
@@ -281,6 +281,7 @@ repeated_passes(Opts) ->
           ?PASS(ssa_opt_bool_bifs_to_fc),
           ?PASS(ssa_opt_sink),
           ?PASS(ssa_opt_inter_block_sink),
+          ?PASS(ssa_opt_bool_bifs_to_fc2),
           ?PASS(ssa_opt_tuple_size),
           ?PASS(ssa_opt_record),
           ?PASS(ssa_opt_type_continue)],        %Must run after ssa_opt_dead to
@@ -3399,6 +3400,174 @@ safe_bool_bifs([#b_set{op={bif,Bif},dst=Dst,args=As}|Is], Bools) ->
     end;
 safe_bool_bifs([_|Is], Bools) ->
     safe_bool_bifs(Is, Bools).
+
+%%%
+%%% Rewrite boolean bif:'and', bif:'and' and bif:'not' to use flow
+%%% control.
+%%%
+%%% We look for basic blocks which end with a conditional branch
+%%% branching on the result of the boolean bif. We only consider bifs
+%%% which are not followed by a succeeded instruction and where the
+%%% conditional branch is the only user.
+%%
+-spec ssa_opt_bool_bifs_to_fc2(any()) -> any().
+ssa_opt_bool_bifs_to_fc2({#opt_st{ssa=Linear,cnt=Count0}=St, FuncDb}) ->
+    Bools = safe_bool_bifs_prime(Linear),
+    BlockMap = maps:from_list(Linear),
+    Fun = fun(#b_set{dst=D}) ->
+                  maps:is_key(D, Bools);
+             (_) -> false
+          end,
+    {BlockMap1, Count1} =
+        beam_ssa:split_blocks(Fun, BlockMap, Count0),
+    {BlockMap2, Count2} =
+        fc2_ensure_single_pred(BlockMap1, Count1, Fun),
+    Preds = beam_ssa:predecessors(BlockMap2),
+    Bools1 = maps:fold(
+               fun(Lbl, #b_blk{is=Is}, Acc) ->
+                       foldl(fun(#b_set{dst=D}=I, A) ->
+                                     case maps:is_key(D, Bools) of
+                                         true ->
+                                             [Pred] = maps:get(Lbl, Preds),
+                                             A#{D => {Pred, Lbl, I}};
+                                         false -> A
+                                     end;
+                                (_, A) ->
+                                     A
+                             end, Acc, Is)
+               end, #{}, BlockMap2),
+    {BlockMap3, Count3} =
+        maps:fold(fun fc2_rewrite/3, {BlockMap2, Count2}, Bools1),
+    {St#opt_st{ssa=beam_ssa:linearize(BlockMap3),cnt=Count3}, FuncDb}.
+
+%% Ensure that each basic block which starts with a #b_set flagged by
+%% Fun has a single predecessor.
+fc2_ensure_single_pred(BlockMap0, Count0, Fun) ->
+    Preds = beam_ssa:predecessors(BlockMap0),
+    maps:fold(fun(L, B=#b_blk{is=[I|_]}, {BlockMap,Count}) ->
+                      case Fun(I) of
+                          true ->
+                              fc2_ensure_block_single_pred(L, B, BlockMap,
+                                                           Count,
+                                                           maps:get(L, Preds));
+                          false ->
+                              {BlockMap,Count}
+                      end;
+                 (_, _, Acc) ->
+                      Acc
+              end, {BlockMap0,Count0}, BlockMap0).
+%%
+%% Check if L has multiple predecessors, if it has, insert an empty
+%% basic block which chains to L as the branch target of all
+%% predecessors.
+fc2_ensure_block_single_pred(0, Block, BlockMap, Count, []) ->
+    %% This is the entry block, we copy its contents to a new block
+    {BlockMap#{Count => Block,
+               0 := #b_blk{is=[],last=#b_br{bool=#b_literal{val=true},
+                                            succ=Count,fail=Count}}},
+     Count+1};
+fc2_ensure_block_single_pred(_, _, BlockMap, Count, [_]) ->
+    %% A single parent, everything is fine
+    {BlockMap,Count};
+fc2_ensure_block_single_pred(L, _, BlockMap, Count, Preds) ->
+    BlockMap1 = fc2_replace_branch_target(L, Count, Preds, BlockMap),
+    {BlockMap1#{Count => #b_blk{is=[],last=#b_br{bool=#b_literal{val=true},
+                                                 succ=L,fail=L}}},
+     Count+1}.
+
+%% Change all branches from Old to branch to New in the blocks in
+%% Preds.
+fc2_replace_branch_target(_, _, [], BlockMap) ->
+    BlockMap;
+fc2_replace_branch_target(Old, New, [L|Preds], BlockMap) ->
+    B = maps:get(L, BlockMap),
+    case B of
+        #b_blk{last=Br=#b_br{succ=Old}} ->
+            fc2_replace_branch_target(
+              Old, New, [L|Preds],
+              BlockMap#{L := B#b_blk{last=Br#b_br{succ=New}}});
+        #b_blk{last=Br=#b_br{fail=Old}} ->
+            fc2_replace_branch_target(
+              Old, New, Preds,
+              BlockMap#{L := B#b_blk{last=Br#b_br{fail=New}}});
+        #b_blk{last=Br=#b_switch{fail=Old}} ->
+            fc2_replace_branch_target(
+              Old, New, [L|Preds],
+              BlockMap#{L := B#b_blk{last=Br#b_switch{fail=New}}});
+        #b_blk{last=Br=#b_switch{list=Ls}} ->
+            Ls1 = map(fun({Lit,Lbl}) when Lbl =:= Old -> {Lit,New};
+                         (LitLbl) -> LitLbl
+                      end, Ls),
+            fc2_replace_branch_target(
+              Old, New, Preds,
+              BlockMap#{L := B#b_blk{last=Br#b_switch{list=Ls1}}});
+        _ ->
+            fc2_replace_branch_target(Old, New, Preds, BlockMap)
+    end.
+
+fc2_rewrite(Dst, {Lbl0, New, #b_set{dst=Dst, op=Op, args=[LHS0,RHS0]}=Bi},
+            {BlockMap0, Count0}) ->
+    {BlockMap, Count, Lbl} =
+        case maps:get(Lbl0, BlockMap0) of
+            #b_blk{last=#b_br{bool=#b_literal{val=true},succ=New,fail=New}} ->
+                {BlockMap0, Count0, Lbl0};
+            #b_blk{last=#b_br{succ=New}=Br}=BB ->
+                {BlockMap0#{Count0 =>
+                                #b_blk{is=[],
+                                       last=#b_br{bool=#b_literal{val=true},
+                                                  succ=Count0,fail=Count0}},
+                            Lbl0 := BB#b_blk{last=Br#b_br{succ=Count0}}},
+                 Count0+1,Count0};
+            #b_blk{last=#b_br{fail=New}=Br}=BB ->
+                {BlockMap0#{Count0 =>
+                                #b_blk{is=[],
+                                       last=#b_br{bool=#b_literal{val=true},
+                                                  succ=Count0,fail=Count0}},
+                            Lbl0 := BB#b_blk{last=Br#b_br{fail=Count0}}},
+                 Count0+1,Count0}
+        end,
+    RHSLbl = Count,
+    LHSSplit = Count + 1,
+    Count1 = Count + 2,
+    Pred = maps:get(Lbl, BlockMap),
+    Succ = #b_blk{is=[Bi|SuccIs]} = maps:get(New, BlockMap),
+    {LHSValue, LHSSucc, LHSFail, LHS, RHS} =
+        case Op of
+            {bif,'and'} -> {false, RHSLbl, LHSSplit, LHS0,RHS0};
+            {bif,'or'} -> {true, LHSSplit, RHSLbl, LHS0,RHS0}
+        end,
+
+    Phi = #b_set{op=phi,dst=Dst,
+                 args=[{#b_literal{val=LHSValue},LHSSplit},{RHS,RHSLbl}]},
+    BlockMap1 =
+        BlockMap#{Lbl := Pred#b_blk{last=#b_br{bool=LHS,
+                                               succ=LHSSucc,fail=LHSFail}},
+                  RHSLbl => #b_blk{last=#b_br{bool=#b_literal{val=true},
+                                              succ=New,fail=New},
+                                   is=[]},
+                  LHSSplit => #b_blk{last=#b_br{bool=#b_literal{val=true},
+                                                succ=New,fail=New},
+                                     is=[]},
+                  New := Succ#b_blk{is=[Phi|SuccIs]}},
+    {BlockMap1, Count1}.
+
+safe_bool_bifs_prime(Linear) ->
+    foldl(fun({_,#b_blk{is=Is}}, Bools1) ->
+                  safe_bool_bifs_prime(Is, Bools1)
+          end, #{}, Linear).
+
+safe_bool_bifs_prime([], Bifs) ->
+    Bifs;
+safe_bool_bifs_prime([_,#b_set{op={succeeded,_}}|Is], Bifs) ->
+    safe_bool_bifs_prime(Is, Bifs);
+safe_bool_bifs_prime([#b_set{op={bif,Bif},dst=Dst}=I|Is], Bifs) ->
+    case Bif of
+        'and' -> safe_bool_bifs_prime(Is, Bifs#{Dst => I});
+        'or'  -> safe_bool_bifs_prime(Is, Bifs#{Dst => I});
+        _     -> safe_bool_bifs_prime(Is, Bifs)
+    end;
+safe_bool_bifs_prime([_|Is], Bifs) ->
+    safe_bool_bifs_prime(Is, Bifs).
 
 %%%
 %%% Common utilities.
