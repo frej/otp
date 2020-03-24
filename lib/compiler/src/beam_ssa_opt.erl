@@ -3107,7 +3107,7 @@ safe_bool_bifs(Linear) ->
 
 safe_bool_bifs([], Bools) ->
     Bools;
-safe_bool_bifs([_,#b_set{op=succeeded}|Is], Bools) ->
+safe_bool_bifs([_,#b_set{op={succeeded,_}}|Is], Bools) ->
     safe_bool_bifs(Is, Bools);
 safe_bool_bifs([#b_set{op={bif,'=:='},
                        dst=Dst,args=[A,#b_literal{val=true}]}|Is], Bools) ->
