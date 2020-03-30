@@ -278,6 +278,7 @@ repeated_passes(Opts) ->
           ?PASS(ssa_opt_dead),
           ?PASS(ssa_opt_cse),
           ?PASS(ssa_opt_tail_phis),
+          ?PASS(ssa_opt_sc_failing_guards),
           ?PASS(ssa_opt_bool_bifs_to_fc),
           ?PASS(ssa_opt_sink),
           ?PASS(ssa_opt_inter_block_sink),
@@ -3571,6 +3572,243 @@ safe_bool_bifs_prime([#b_set{op={bif,Bif},dst=Dst}=I|Is], Bifs) ->
     end;
 safe_bool_bifs_prime([_|Is], Bifs) ->
     safe_bool_bifs_prime(Is, Bifs).
+
+%%%
+%%% Try to short circuit the failing path of bif:'and', bif:'or', and
+%%% bif:'not' in guards.
+%%%
+%%% We detect the pattern:
+%%%
+%%% Predecessor:
+%%%   br/switch to Next
+%%%
+%%% Next:
+%%%   X = phi {{literal, Lit}, Predecessor}, ...
+%%%   ...
+%%%   A = bif:<unsafe bif>(..., X, ...)
+%%%   B = succeeded,guard A
+%%%   br B, Success, Fail
+%%%
+%%% If Lit is not 'true' nor 'false' we know that the succeed check
+%%% will fail, and thus change the branch from Predecessor to Next to
+%%% branch directly to Fail. This short circuit is safe if all the
+%%% following conditions apply:
+%%%
+%%% * The live out set of Predecessor is a superset of the live-in set
+%%%   of the Fail block.
+%%%
+%%% * All execution paths from Predecessor reach the unsafe bif or the
+%%%   Fail block.
+%%%
+%%% * All execution paths from Predecessor reaching the unsafe bif or
+%%%   branching to the Fail block are free of side-effects.
+%%%
+ssa_opt_sc_failing_guards({#opt_st{ssa=Linear}=St, FuncDb}) ->
+    Liveness = liveness(Linear),
+    Blocks = maps:from_list(Linear),
+    Unsafe = unsafe_booleans(Linear),
+    Defs = block_definitions(Blocks),
+    Phis = foldl(fun({V,Def,F}, Acc) ->
+                         case maps:get(V, Defs, false) of
+                             {L,#b_set{op=phi,args=As}} ->
+                                 [{L,Def,F,A} || A <- As] ++ Acc;
+                             _ ->
+                                 Acc
+                         end
+                 end, [], Unsafe),
+    %% Build a list of phi-edges which, if traversed, will trigger a
+    %% guard failure as they are not booleans.
+    NonBooleans =
+        lists:flatmap(fun({Successor,Def,Fail,
+                           {#b_literal{val=V},Predecessor}})
+                            when not is_boolean(V) ->
+                              [{Predecessor,Def,Successor,Fail}];
+                         (_) ->
+                              []
+                      end, Phis),
+    Blocks1 =
+        foldl(fun({Block,Def,Old,New}, Acc) ->
+                      scfg_attempt_replace(Block, Def, Old, New, Acc, Liveness)
+              end, Blocks, NonBooleans),
+    Linear1 = beam_ssa:linearize(Blocks1),
+    {St#opt_st{ssa=Linear1}, FuncDb}.
+
+scfg_attempt_replace(Pred, Def, Succ, Fail, Blocks, Liveness) ->
+    #{ Fail := {F,_}} = Liveness,
+    #{ Pred := {_,P}} = Liveness,
+    case cerl_sets:is_subset(F, P) of
+        true ->
+            try
+                scfg_attempt_replace1(Pred, Def, Succ, Fail, Blocks)
+            catch
+                throw:not_possible -> Blocks
+            end;
+        false -> Blocks
+    end.
+
+scfg_attempt_replace1(Pred, Def, Succ, Fail, Blocks) ->
+    scfg_attempt_replace1([Pred], cerl_sets:new(), Pred,
+                          Def, Succ, Fail, Blocks).
+
+scfg_attempt_replace1([], _Visited, Pred, _Def, Succ, Fail, Blocks) ->
+    fc2_replace_branch_target(Succ, Fail, [Pred], Blocks);
+scfg_attempt_replace1([Block|Work], Visited, Pred, Def,
+                      Succ, Fail, Blocks) ->
+    case cerl_sets:is_element(Block, Visited) of
+        true ->
+            scfg_attempt_replace1(Work, Visited, Pred, Def,
+                                  Succ, Fail, Blocks);
+        false ->
+            Visited1 = cerl_sets:add_element(Block, Visited),
+            #{ Block := #b_blk{last=L,is=Is}} = Blocks,
+            Done = scfg_reaches_bif(Is, Def), %% HERE
+            Work1 = case {Done, L} of
+                        {true,_} -> Work;
+                        {_,#b_ret{}} -> throw(not_possible);
+                        {_,#b_br{succ=N0,fail=N1}} -> [N0,N1|Work];
+                        {_,#b_switch{fail=F,list=Ls}} ->
+                            [F | [Next || {_,Next} <- Ls]] ++ Work
+                    end,
+            Work2 = [N || N <- Work1, N =/= Fail],
+            scfg_attempt_replace1(Work2, Visited1, Pred,
+                                  Def, Succ, Fail, Blocks)
+    end.
+
+scfg_reaches_bif([], _) ->
+    false;
+scfg_reaches_bif([#b_set{dst=Def}|_], Def) ->
+    true;
+scfg_reaches_bif([#b_set{op=phi}|Is], Def) ->
+    %% Although beam_ssa:no_side_effect/1 claims that phi instructions
+    %% have side effects, this is not true in this case. If the
+    %% phi-instruction would be significant, we would never get here
+    %% due to the liveness check.
+    scfg_reaches_bif(Is, Def);
+scfg_reaches_bif([I|Is], Def) ->
+    case beam_ssa:no_side_effect(I) of
+        true -> scfg_reaches_bif(Is, Def);
+        false -> throw(not_possible)
+    end.
+
+%%%
+%%% Find variables which will trigger a guard failure if they are not
+%%% a boolean. Return a list of {Var::#b_var{}, Fail::#b_label{}}
+%%% tuples, where Var is the result of the unsafe bif and Fail is the
+%%% branch target for the failing guard.
+%%%
+unsafe_booleans([{_,#b_blk{is=Is,last=#b_br{bool=Bool,fail=F}}}|Blocks]) ->
+    case reverse(Is) of
+        [#b_set{op={succeeded,guard},dst=Bool,args=[Dst]},
+         #b_set{op={bif,Op},dst=Dst,args=Args}|_] when
+              Op =:= 'and'; Op =:= 'or'; Op =:= 'not' ->
+            [{A,Dst,F} || A=#b_var{} <- Args] ++ unsafe_booleans(Blocks);
+        _ ->
+            unsafe_booleans(Blocks)
+    end;
+unsafe_booleans([_|Blocks]) ->
+    unsafe_booleans(Blocks);
+unsafe_booleans([]) ->
+    [].
+
+%%%
+%%% Calculate the liveness set of each basic block
+%%%
+-spec liveness(Linear :: [{beam_ssa:label(),beam_ssa:b_blk()}]) ->
+          #{beam_ssa:label():={LiveIn::cerl_set:set(),LiveOut::cerl_set:set()}}.
+liveness(Linear) ->
+    liveness_iter(Linear, liveness_usedef(Linear, #{}, [])).
+
+liveness_iter(Blocks, UseDefForBlock) ->
+    RevLinear = reverse([L || {L,_} <- Blocks]),
+    Map = maps:from_list([{L, {cerl_sets:new(), cerl_sets:new()}}
+                          || L <- RevLinear]),
+    liveness_iter(RevLinear, RevLinear, UseDefForBlock, Map, false).
+
+liveness_iter([], _, _, Map, false) ->
+    Map;
+liveness_iter([], BlockOrder, UseDefForBlock, Map, true) ->
+    liveness_iter(BlockOrder, BlockOrder, UseDefForBlock, Map, false);
+liveness_iter([L|Blocks], BlockOrder, UseDefForBlock, Map, Changed) ->
+    {Uses, Defs, PhiUses, Succs} = maps:get(L, UseDefForBlock),
+    {In0, Out0} = maps:get(L, Map),
+    In = cerl_sets:union(Uses, cerl_sets:subtract(Out0, Defs)),
+    Out = foldl(fun(Succ, Acc) ->
+                        {In1, _} = maps:get(Succ, Map),
+                        cerl_sets:union(Acc, In1)
+                end,
+                PhiUses, Succs),
+    case {In, Out} of
+        {In0, Out0} ->
+            liveness_iter(Blocks, BlockOrder, UseDefForBlock, Map, Changed);
+        _ ->
+            Map1 = Map#{L := {In, Out}},
+            liveness_iter(Blocks, BlockOrder, UseDefForBlock, Map1, true)
+    end.
+
+%%%
+%%% Map each basic block to a tuple {Defs, Uses, Phiuses, Successors}
+%%%
+liveness_usedef([], Acc, Phis) ->
+    foldl(fun({Use,L}, Acc1) ->
+                  {Uses, Defs, PhiUses, Succs} = maps:get(L, Acc1),
+                  PhiUses1 = cerl_sets:add_element(Use, PhiUses),
+                  Acc1#{L := {Uses, Defs, PhiUses1, Succs}}
+          end, Acc, Phis);
+liveness_usedef([{L, #b_blk{is=Is,last=Last}=Blk}|Bs], Acc, Phis) ->
+    {Uses, Defs, Phis1} = liveness_usedef_is([Last|reverse(Is)], Phis),
+    Acc1 = Acc#{L => {Uses, Defs, cerl_sets:new(), beam_ssa:successors(Blk)}},
+    liveness_usedef(Bs, Acc1, Phis1).
+
+liveness_usedef_is(Is, Phis) ->
+    liveness_usedef_is(Is, cerl_sets:new(), cerl_sets:new(), Phis).
+
+liveness_usedef_is([], Uses, Defs, Phis) ->
+    {Uses, Defs, Phis};
+liveness_usedef_is([#b_set{op=phi}|_]=Is, Uses, Defs, Phis) ->
+    liveness_usedef_phis(Is, Uses, Defs, Phis);
+liveness_usedef_is([#b_set{dst=Dst}=I|Is], Uses, Defs, Phis) ->
+    Uses1 = foldl(fun(Var, Acc) -> cerl_sets:add_element(Var, Acc) end,
+                  Uses, liveness_uses(I)),
+    liveness_usedef_is(Is, cerl_sets:del_element(Dst, Uses1),
+                       cerl_sets:add_element(Dst, Defs), Phis);
+liveness_usedef_is([I|Is], Uses, Defs, Phis) ->
+    Uses1 = foldl(fun(Var, Acc) -> cerl_sets:add_element(Var, Acc) end,
+                  Uses, liveness_uses(I)),
+    liveness_usedef_is(Is, Uses1, Defs, Phis).
+
+liveness_uses(#b_set{args=As}) ->
+    liveness_args(As);
+liveness_uses(#b_br{bool=B}) ->
+    liveness_args([B]);
+liveness_uses(#b_ret{arg=A}) ->
+    liveness_args([A]);
+liveness_uses(#b_switch{arg=A}) ->
+    liveness_args([A]).
+
+liveness_args([]) ->
+    [];
+liveness_args([#b_var{}=V|As]) ->
+    [V|liveness_args(As)];
+liveness_args([#b_literal{}|As]) ->
+    liveness_args(As);
+liveness_args([#b_remote{mod=M,name=N}|As]) ->
+    liveness_args([M,N|As]);
+liveness_args([#b_local{name=N}|As]) ->
+    liveness_args([N|As]).
+
+liveness_usedef_phis([], Uses, Defs, Phis) ->
+    {Uses, Defs, Phis};
+liveness_usedef_phis([#b_set{op=phi,dst=Dst,args=As}|Is], Uses, Defs, Phis) ->
+    PhiUses = foldl(fun({Var,L}, Acc) ->
+                            case liveness_args([Var]) of
+                                [] -> Acc;
+                                [Use] -> [{Use, L}|Acc]
+                            end
+                    end,
+                    [], As),
+    liveness_usedef_phis(Is,  cerl_sets:del_element(Dst, Uses),
+                         cerl_sets:add_element(Dst, Defs),
+                         PhiUses ++ Phis).
 
 %%%
 %%% Common utilities.
