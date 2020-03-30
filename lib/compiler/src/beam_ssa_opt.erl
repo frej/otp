@@ -277,6 +277,7 @@ repeated_passes(Opts) ->
           ?PASS(ssa_opt_dead),
           ?PASS(ssa_opt_cse),
           ?PASS(ssa_opt_tail_phis),
+          ?PASS(ssa_opt_sc_failing_guard),
           ?PASS(ssa_opt_bool_bifs_to_fc),
           ?PASS(ssa_opt_sink),
           ?PASS(ssa_opt_inter_block_sink),
@@ -3272,6 +3273,81 @@ safe_bool_bifs_prime([#b_set{op={bif,Bif},dst=Dst}=I|Is], Bifs) ->
     end;
 safe_bool_bifs_prime([_|Is], Bifs) ->
     safe_bool_bifs_prime(Is, Bifs).
+
+
+%%%
+%%% Try to short circuit the failing path of bif:'and', bif:'or', and
+%%% bif:'not' in guards.
+%%%
+%%% We detect the pattern:
+%%%
+%%% P:
+%%%   br/switch to N
+%%%
+%%% N:
+%%%   X = phi {{literal, Lit}, P}, ...
+%%%   ...
+%%%   A = bif:<boolean-op>(..., X, ...)
+%%%   B = succeeded,guard A
+%%%   br B, Success, Fail
+%%%
+%%% If Lit is not 'true' nor 'false' we know that the succeed check
+%%% will fail, and thus change the branch from P to N to branch
+%%% directly to Fail. As this is in a guard context, we can be sure
+%%% that the code we short circuit doesn't have side effects nor
+%%% defines anything used past Fail.
+%%%
+ssa_opt_sc_failing_guard({#opt_st{ssa=Linear}=St, FuncDb}) ->
+    Blocks = maps:from_list(Linear),
+    Unsafe = unsafe_booleans(Linear),
+    Defs = block_definitions(Blocks),
+    %% Select variables defined by a phi.
+    Phis = foldl(fun({V, F}, Acc) ->
+                         case maps:get(V, Defs, false) of
+                             {L, #b_set{op=phi,args=As}} ->
+                                 [{L, F, A} || A <- As] ++ Acc;
+                             _ ->
+                                 Acc
+                         end
+                 end, [], Unsafe),
+    %% Build a list of phi-edges which, if traversed, will trigger a
+    %% guard failure as they are not booleans.
+    NonBooleans = lists:flatmap(fun({Successor, Fail,
+                                     {#b_literal{val=V}, Predecesor}})
+                                      when not is_boolean(V) ->
+                                        [{Predecesor,Successor,Fail}];
+                                   (_) ->
+                                        []
+                                end, Phis),
+    %% As we know that that a branch to the block with the phi will
+    %% eventually trigger a branch to the fail label, change the
+    %% branch instruction in the predecessor to branch there directly.
+    Blocks1 = foldl(fun({Block,Old,New}, Acc) ->
+                            fc2_replace_branch_target(Old, New, [Block], Acc)
+                    end,
+                    Blocks,
+                    NonBooleans),
+    Linear1 = beam_ssa:linearize(Blocks1),
+    {St#opt_st{ssa=Linear1}, FuncDb}.
+
+%%%
+%%% Find variables which will trigger a guard failure if they are not
+%%% a boolean. Return a list of {#b_var{}, #b_label{}} tuples, where
+%%% the label is the branch target for the failing guard.
+%%%
+unsafe_booleans([{_,#b_blk{is=Is,last=#b_br{bool=Bool,fail=F}}}|Blocks]) ->
+    case reverse(Is) of
+        [#b_set{op={succeeded,guard},dst=Bool,args=[Dst]},
+         #b_set{op={bif,Op},dst=Dst,args=Args}|_] when
+              Op =:= 'and'; Op =:= 'or'; Op =:= 'not' ->
+            [{A, F} || A=#b_var{} <- Args] ++ unsafe_booleans(Blocks);
+        _ ->
+            unsafe_booleans(Blocks)
+    end;
+unsafe_booleans([_|Blocks]) ->
+    unsafe_booleans(Blocks);
+unsafe_booleans([]) ->
+    [].
 
 %%%
 %%% Common utilities.
