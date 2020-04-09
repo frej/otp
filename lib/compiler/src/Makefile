@@ -73,6 +73,7 @@ MODULES =  \
 	beam_ssa_share \
 	beam_ssa_type \
 	beam_kernel_to_ssa \
+        beam_q \
 	beam_trim \
 	beam_types \
 	beam_utils \
