@@ -910,6 +910,7 @@ asm_passes() ->
 
        {iff,diffable,?pass(diffable)},
        {pass,beam_z},
+       {iff,dq,?pass(beam_q)},
        {iff,diffable,{listing,"S"}},
        {iff,dz,{listing,"z"}},
        {iff,dopt,{listing,"optimize"}},
@@ -2152,6 +2153,7 @@ pre_load() ->
 	 beam_kernel_to_ssa,
 	 beam_opcodes,
 	 beam_peep,
+         beam_q,
 	 beam_ssa,
 	 beam_ssa_bool,
 	 beam_ssa_bsm,
@@ -2186,3 +2188,15 @@ pre_load() ->
 	 v3_kernel],
     _ = code:ensure_modules_loaded(L),
     ok.
+
+beam_q(Code, St) ->
+    File = outfile(St#compile.base, "Q", St#compile.options),
+    case file:open(File, [write,delayed_write]) of
+	{ok,S} ->
+            beam_q:module(Code, S),
+	    ok = file:close(S),
+	    {ok,Code,St};
+	{error,Error} ->
+	    Es = [{File,[{none,compile,{write_error,Error}}]}],
+	    {error,St#compile{errors=St#compile.errors ++ Es}}
+    end.
