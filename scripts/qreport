@@ -1,0 +1,88 @@
+#!/usr/bin/env escript
+%% -*- erlang -*-
+-mode(compile).
+
+-import(lists, [foldl/3, filter/2, sort/1, foreach/2, sort/2]).
+
+main(Args0) ->
+    {Base,Other,OutDir} = opts(Args0),
+    io:format("Comparing ~p against ~p, writing output to ~p~n",
+              [Base, Other, OutDir]),
+    B = read_qfiles(Base),
+    O = read_qfiles(Other),
+    Funs = sets:to_list(sets:intersection(sets:from_list(maps:keys(B)),
+                                          sets:from_list(maps:keys(O)))),
+    R = [{Fun, map_diff(maps:get(Fun, O), maps:get(Fun, B))} || Fun <- Funs],
+    NonZero = filter(fun({_, Map}) -> any_value_nonzero(Map) end, R),
+    [{_,Columns0}|_] = NonZero,
+    Columns = sort(maps:keys(Columns0)),
+    io:format("~p~n", [Columns]),
+    foreach(fun(Col) ->
+                    Sorted = sort_by_column(NonZero, Col),
+                    Filename =
+                        filename:join(OutDir, atom_to_list(Col) ++ ".html"),
+                    ok = filelib:ensure_dir(Filename),
+                    to_html(Columns, Filename, Sorted)
+            end, Columns),
+    ok.
+
+sort_by_column(Rows, Col) ->
+    sort(fun(A={_,Map0},B={_,Map1}) ->
+                 case {maps:get(Col, Map0), maps:get(Col, Map1)} of
+                     {X,X} -> A < B;
+                     {X,Y} -> X < Y
+                 end
+         end,
+         Rows).
+
+to_html(Columns, Filename, Rows) ->
+    Out = ["<html><table style=\"width:100%\">\n",
+           %% The header
+           "<tr><th>fun</th>",
+           [["<th style=\"text-align:right\">", atom_to_list(C), "</th>"]
+            || C <- Columns], "</tr>\n",
+           %% The functions
+           [["<tr><td>", io_lib:format("~p:~p/~p", [M,F,A]), "</td>",
+             [["<td style=\"text-align:right\">",
+               integer_to_list(maps:get(C, Data)), "</td>"]
+              || C <- Columns], "</tr>\n"]
+            || {{M,F,A}, Data} <- Rows],
+           "</table></html>\n"],
+    ok = file:write_file(Filename, Out).
+
+usage() ->
+    S = ["usage: qreport BASE_DIRECTORY OTHER_DIRECTORY OUTPUT_DIRECTORY\n\n"
+         "Options:\n"
+         "\n"
+         "DESCRIPTION\n"
+         "\n"
+         "Compare the quality report files in two directories against each"
+         " other\n"
+        ],
+    io:put_chars(S),
+    halt(1).
+
+opts([Base,Other,Out]) ->
+    {Base,Other,Out};
+opts(_) ->
+    usage().
+
+map_diff(A, B) ->
+    maps:map(fun(Key, Val) -> Val - maps:get(Key, B) end, A).
+
+any_value_nonzero(Map) ->
+    any_value_nonzero1(maps:values(Map)).
+any_value_nonzero1([]) ->
+    false;
+any_value_nonzero1([0|Rest]) ->
+    any_value_nonzero1(Rest);
+any_value_nonzero1(_) ->
+    true.
+
+read_qfiles(Dir) ->
+    foldl(fun(F, Data) ->
+                  {ok,[D]} = file:consult(F),
+                  maps:merge(D, Data)
+          end,
+          #{},
+          filelib:wildcard(filename:join(Dir, "*.Q"))).
