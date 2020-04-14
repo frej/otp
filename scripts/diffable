@@ -7,7 +7,8 @@
 -define(LONG_COMPILE_THRESHOLD, 10000).
 
 main(Args0) ->
-    DefOpts = #{format=>asm,no_compile=>false,legacy=>false,deterministic=>[]},
+    DefOpts = #{format=>asm,no_compile=>false,legacy=>false,deterministic=>[],
+                quality=>[]},
     {Args,Opts} = opts(Args0, DefOpts),
     case Args of
 	[OutDir] ->
@@ -25,6 +26,7 @@ usage() ->
          "  --no-compile    Disassemble from BEAM files (use with --dis)\n"
          "  --deterministic Compile with +deterministic (useful when comparing"
          "                  output from different build trees using --asm)"
+         "  --quality       Compile with +dq\n"
          "\n"
          "DESCRIPTION\n"
          "\n"
@@ -86,6 +88,8 @@ opt("no-compile", Opts) ->
     Opts#{format:=dis,no_compile:=true};
 opt("deterministic", Opts) ->
     Opts#{deterministic:=[deterministic]};
+opt("quality", Opts) ->
+    Opts#{quality:=[dq]};
 opt(Opt, _Opts) ->
     io:format("Uknown option: --~ts\n\n", [Opt]),
     usage().
@@ -265,10 +269,11 @@ compile_to_asm_fun(#{outdir:=OutDir}=Opts) ->
     fun(Spec) ->
             Legacy = map_get(legacy, Opts),
             Deterministic = map_get(deterministic, Opts),
-            compile_to_asm(Spec, OutDir, Legacy, Deterministic)
+            Quality = map_get(quality, Opts),
+            compile_to_asm(Spec, OutDir, Legacy, Deterministic, Quality)
     end.
 
-compile_to_asm({Beam,elixir}, OutDir, _Legacy, _Deterministic) ->
+compile_to_asm({Beam,elixir}, OutDir, _Legacy, _Deterministic, _Quality) ->
     Abst = get_abstract_from_beam(Beam),
     Source = filename:rootname(Beam, ".beam"),
     Opts = [diffable,{outdir,OutDir},report_errors,{source,Source}],
@@ -278,8 +283,9 @@ compile_to_asm({Beam,elixir}, OutDir, _Legacy, _Deterministic) ->
         error ->
             error
     end;
-compile_to_asm({File,Opts0}, OutDir, Legacy, Deterministic) ->
-    Opts = Deterministic ++ [diffable,{outdir,OutDir},report_errors|Opts0],
+compile_to_asm({File,Opts0}, OutDir, Legacy, Deterministic, Quality) ->
+    Opts = Deterministic ++ Quality
+        ++ [diffable,{outdir,OutDir},report_errors|Opts0],
     case compile:file(File, Opts) of
         {ok,_Mod} ->
             case Legacy of
