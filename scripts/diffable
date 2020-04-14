@@ -26,6 +26,7 @@ usage() ->
          "  --deterministic Compile with +deterministic (useful when\n"
          "                  comparing output from different build trees using\n"
          "                  --asm)\n"
+         "  --quality       Compile with +dq\n"
          "  --co <option>   Add <option> to the list of options given to the\n"
          "                  compiler. See compile:file/2 for valid options.\n"
          "\n"
@@ -83,6 +84,8 @@ opts(["--no-compile"|Args], Opts) ->
     opts(Args, Opts#{format:=dis,no_compile:=true});
 opts(["--deterministic"|Args], #{copts:=Copts}=Opts) ->
     opts(Args, Opts#{copts:=Copts++[deterministic]});
+opts(["--quality"|Args], #{copts:=Copts}=Opts) ->
+    opts(Args, Opts#{copts:=Copts++[dq]});
 opts(["--co",Opt|Args], #{copts:=Copts}=Opts) ->
     opts(Args, Opts#{copts:=Copts++[list_to_atom(Opt)]});
 opts(["--"++Opt|_], _Opts) ->
