@@ -42,6 +42,7 @@
          split_blocks/3,
          successors/1,successors/2,
          trim_unreachable/1,
+         update_phi_labels/4,
          used/1,uses/1,uses/2]).
 
 -export_type([b_module/0,b_function/0,b_blk/0,b_set/0,
@@ -1119,6 +1120,13 @@ is_merge_allowed_1(_, #b_blk{last=#b_switch{}}, #b_blk{}) ->
 %%  In the given blocks, replace label Old in with New in all
 %%  phi nodes. This is useful after merging or splitting
 %%  blocks.
+
+-spec update_phi_labels(From, Old, New, Blocks0) -> Blocks when
+      From :: [label()],
+      Old :: label(),
+      New :: label(),
+      Blocks0 :: block_map(),
+      Blocks :: block_map().
 
 update_phi_labels([L|Ls], Old, New, Blocks0) ->
     case Blocks0 of
