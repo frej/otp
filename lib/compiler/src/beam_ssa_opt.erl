@@ -2747,9 +2747,12 @@ common_dominator(Ls0, Dom, Numbering, Unsuitable) ->
 %% Move get_tuple_element instructions to their new locations.
 
 move_defs(V, From, To, Blocks) ->
+    move_defs(V, From, To, Blocks, false).
+
+move_defs(V, From, To, Blocks, AvoidXClobber) ->
     #{From:=FromBlk0,To:=ToBlk0} = Blocks,
     {Def,FromBlk} = remove_def(V, FromBlk0),
-    try insert_def(V, Def, ToBlk0) of
+    try insert_def(V, Def, ToBlk0, AvoidXClobber) of
         ToBlk ->
             Blocks#{From:=FromBlk,To:=ToBlk}
     catch
@@ -2766,22 +2769,23 @@ remove_def_is([#b_set{dst=Dst}=Def|Is], Dst, Acc) ->
 remove_def_is([I|Is], Dst, Acc) ->
     remove_def_is(Is, Dst, [I|Acc]).
 
-insert_def(V, Def, #b_blk{is=Is0}=Blk) ->
-    Is = insert_def_is(Is0, V, Def),
+insert_def(V, Def, #b_blk{is=Is0}=Blk, AvoidXClobber) ->
+    Is = insert_def_is(Is0, V, Def, AvoidXClobber),
     Blk#b_blk{is=Is}.
 
-insert_def_is([#b_set{op=phi}=I|Is], V, Def) ->
+insert_def_is([#b_set{op=phi}=I|Is], V, Def, AvoidXClobber) ->
     case member(V, beam_ssa:used(I)) of
         true ->
             throw(not_possible);
         false ->
-            [I|insert_def_is(Is, V, Def)]
+            [I|insert_def_is(Is, V, Def, AvoidXClobber)]
     end;
-insert_def_is([#b_set{op=Op}=I|Is]=Is0, V, Def) ->
-    Action0 = case Op of
-                  call -> beyond;
-                  'catch_end' -> beyond;
-                  timeout -> beyond;
+insert_def_is([#b_set{op=Op}=I|Is]=Is0, V, Def, AvoidXClobber) ->
+    Action0 = case {Op, AvoidXClobber andalso beam_ssa:clobbers_xregs(I)} of
+                  {_, true} -> here;
+                  {call, false} -> beyond;
+                  {'catch_end', _} -> beyond;
+                  {timeout, _} -> beyond;
                   _ -> here
               end,
     Action = case Is of
@@ -2797,12 +2801,12 @@ insert_def_is([#b_set{op=Op}=I|Is]=Is0, V, Def) ->
                     [Def|Is0];
                 false ->
                     %% Place it beyond the current instruction.
-                    [I|insert_def_is(Is, V, Def)]
+                    [I|insert_def_is(Is, V, Def, AvoidXClobber)]
             end;
         here ->
             [Def|Is0]
     end;
-insert_def_is([], _V, Def) ->
+insert_def_is([], _V, Def, _AvoidXClobber) ->
     [Def].
 
 %%%
