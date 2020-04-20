@@ -2184,6 +2184,8 @@ opt_ne_single_use(Var, Uses) when is_map(Uses) ->
 %%% looks at get_tuple_element this pass considers any define which
 %%% can be considered safe to move.
 %%%
+%%% TODO: Consider updating the liveness information on-the-fly
+%%%
 ssa_opt_inter_block_sink({St, FuncDb}) ->
     %% TODO: This could be optimized by only calculating the dominance
     %% tree once, and updating the Used and Defs sets as we move defs.
@@ -2194,6 +2196,7 @@ ssa_opt_inter_block_sink({St, FuncDb}) ->
 
 ssa_opt_inter_block_sink1({#opt_st{ssa=Linear}=St, FuncDb}) ->
     Blocks0 = maps:from_list(Linear),
+    Liveness = liveness(Linear),
 
     %% Create a map with all variables mapped to the block the
     %% variable is defined in.
@@ -2237,12 +2240,20 @@ ssa_opt_inter_block_sink1({#opt_st{ssa=Linear}=St, FuncDb}) ->
     %% position is a block that dominates all uses of the variable.
     DefLoc = new_def_locations(Used, Defs, Dom, Numbering, Unsuitable),
 
-    %% Now move all suitable defining instructions to their new
-    %% blocks.
-    Blocks = foldl(fun({V,To}, A) ->
-                           From = map_get(V, Defs),
-                           move_defs(V, From, To, A)
-                   end, Blocks0, DefLoc),
+    %% Now move all suitable defining instructions to their new blocks
+    %% if the move is considered good.
+    DefIs = beam_ssa:definitions(Blocks0),
+    Blocks =
+        foldl(fun({V,To}, A) ->
+                      From = map_get(V, Defs),
+                      GoodMove = is_good_def_move(maps:get(V, DefIs), From,
+                                                  To, A, Liveness),
+                      case GoodMove of
+                          true ->
+                              move_defs(V, From, To, A, true);
+                          false -> A
+                      end
+              end, Blocks0, DefLoc),
     {St#opt_st{ssa=beam_ssa:linearize(Blocks)}, FuncDb}.
 
 %%%
@@ -3480,3 +3491,102 @@ new_var(#b_var{name=Base}, Count) ->
 new_var(Base, Count) when is_atom(Base) ->
     {#b_var{name={Base,Count}},Count+1}.
 
+%%%
+%%% Evaluate if moving the definition of `Def` from the block `From`
+%%% to the block `To` is good with regards to increased spilling.
+%%%
+is_good_def_move(#b_set{dst=Var}=Def, From, To, BlockMap, Liveness) ->
+    DefUses = beam_ssa:used(Def),
+    #{ To := {LiveIns,_}, From := {_,LiveOuts} } = Liveness,
+    #{ From := #b_blk{is=Is} } = BlockMap,
+    UseSet = cerl_sets:from_list(DefUses),
+    DefHasFollowingClobbers = igdm_has_following_xclobbers(Def, Is),
+    NetLiveOutDelta = cerl_sets:size(cerl_sets:subtract(UseSet, LiveOuts)),
+    NetLiveInDelta = cerl_sets:size(cerl_sets:subtract(UseSet, LiveIns)),
+    case cerl_sets:is_subset(UseSet, LiveIns) of
+        true ->
+            %% Everything needed for the Def is already live at `To`,
+            %% sinking won't make anything worse.
+            true;
+        false when NetLiveOutDelta > 0, DefHasFollowingClobbers ->
+            %% Moving this def would increase the spill-set size at
+            %% the clobbers in `From`, so don't do it.
+            false;
+        false when NetLiveInDelta =:= 1 ->
+            %% We increase the liveness set by one element, but on the
+            %% other hand it won't contain Def, so sinking won't make
+            %% anything worse.
+            true;
+        false ->
+            %% We need to look at the blocks through which we will
+            %% extend the liveness ranges for UseSet. If there are no
+            %% x-clobbering instructions in the blocks, we know that
+            %% this operation won't produce more spilling.
+            Blocks = blocks_on_path(Var, From, To, BlockMap, Liveness),
+            not blocks_clobber_x(Blocks, BlockMap)
+    end.
+
+%%% Return true if the block containing `Def`, has x-clobbering
+%%% instructions following `Def`.
+igdm_has_following_xclobbers(Def, [Def|Is]) ->
+    blocks_clobber_x_is(Is);
+igdm_has_following_xclobbers(Def, [_|Is]) ->
+    igdm_has_following_xclobbers(Def, Is).
+
+blocks_clobber_x([], _) ->
+    false;
+blocks_clobber_x([B|Blocks], BlockMap) ->
+    #{ B := #b_blk{is=Is}} = BlockMap,
+    blocks_clobber_x_is(Is) orelse blocks_clobber_x(Blocks, BlockMap).
+
+blocks_clobber_x_is([]) ->
+    false;
+blocks_clobber_x_is([I|Is]) ->
+    beam_ssa:clobbers_xregs(I) orelse blocks_clobber_x_is(Is).
+
+%%
+%% While sinking a def of `V` from `From` to `To`, we can efficiently
+%% find the basic blocks which are on the path from `From` to `To` by
+%% doing a search of the CFG starting at `From` and only descending
+%% into basic blocks in which `V` is live-in.
+%%
+%% Return a list of the blocks on all paths from From to To. T
+%%
+blocks_on_path(V, From, To, BlockMap, Liveness) ->
+    blocks_on_path(V, To, BlockMap, Liveness,
+                   get_successors(From, BlockMap),
+                   cerl_sets:new()).
+
+blocks_on_path(_V, _To, _BlockMap, _Liveness, [], Visited) ->
+    cerl_sets:to_list(Visited);
+blocks_on_path(V, To, BlockMap, Liveness, [To|ToVisit], Visited) ->
+    blocks_on_path(V, To, BlockMap, Liveness, ToVisit, Visited);
+blocks_on_path(V, To, BlockMap, Liveness, [Block|ToVisit], Visited) ->
+    case cerl_sets:is_element(Block, Visited) of
+        true ->
+            blocks_on_path(V, To, BlockMap, Liveness, ToVisit, Visited);
+        false ->
+            Visited1 = cerl_sets:add_element(Block, Visited),
+            Next = case is_live_in(V, Block, Liveness) of
+                       false ->
+                           [];
+                       true ->
+                           get_successors(Block, BlockMap)
+                   end,
+            blocks_on_path(V, To, BlockMap, Liveness, Next ++ ToVisit, Visited1)
+    end.
+
+get_successors(Block, BlockMap) ->
+    #{ Block := #b_blk{last=L}} = BlockMap,
+    case L of
+        #b_br{succ=B0,fail=B1} ->
+            [B0,B1];
+        #b_switch{fail=F,list=Ls} ->
+            [F | [B || {_,B} <- Ls]]
+        %% We should not end up in a ret
+    end.
+
+%% Return true if V is live-in in Block
+is_live_in(V, Block, Liveness) ->
+    #{ Block := {LiveIns,_} } = Liveness,
+    cerl_sets:is_element(V, LiveIns).
