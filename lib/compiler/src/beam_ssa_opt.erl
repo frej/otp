@@ -37,9 +37,12 @@
 -module(beam_ssa_opt).
 -export([module/2]).
 
+%% XXXX: For debugging
+-export([ssa_opt_regpress/1, pdg_to_dot/2]).
+
 -include("beam_ssa_opt.hrl").
 
--import(lists, [all/2,append/1,duplicate/2,flatten/1,foldl/3,
+-import(lists, [all/2,append/1,duplicate/2,flatten/1,foldl/3,foreach/2,
                 keyfind/3,last/1,map/2,mapfoldl/3,member/2,
                 partition/2,reverse/1,reverse/2,
                 splitwith/2,sort/1,takewhile/2,unzip/1]).
@@ -297,6 +300,7 @@ epilogue_passes(Opts) ->
 
           %% Run live one more time to clean up after the previous
           %% epilogue passes.
+          ?PASS(ssa_opt_regpress),
           ?PASS(ssa_opt_live),
           ?PASS(ssa_opt_bsm),
           ?PASS(ssa_opt_bsm_shortcut),
@@ -2468,6 +2472,211 @@ used_blocks([{L,Blk}|Bs], Def, Acc0) ->
     used_blocks(Bs, Def, Acc);
 used_blocks([], _Def, Acc) ->
     rel2fam(Acc).
+
+-spec ssa_opt_regpress(any()) -> any().
+ssa_opt_regpress({#opt_st{ssa=Linear,cnt=Counter}=St, FuncDb}) ->
+    {Split0,Counter1} = regpress_split(Linear, Counter),
+    Liveness = liveness(beam_ssa:linearize(Split0)),
+    Split = regpress_optimize_blocks(Split0, Liveness),
+    %% io:format("linear:~n~p~n", [Linear]),
+    %% io:format("split:~n~p~n", [Split]),
+    Merged = regpress_merge(Split, Counter),
+    Merged = Linear,
+    %% io:format("merged:~n~p~n", [Merged]),
+    {St#opt_st{ssa=Merged,cnt=Counter1},FuncDb}.
+
+regpress_optimize_blocks(Split, Liveness) ->
+    maps:map(fun(L, Region) ->
+                     regpress_optimize_block(L, Region, Liveness)
+             end, Split).
+
+regpress_optimize_block(L, R=#b_blk{is=[I,_|_]=Is}, Liveness) ->
+    %% need at least two instructions and both of them to be
+    %% side-effect free. Due to our splitting logic, it is sufficent
+    %% to check the first instruction as, if it is side-effect free
+    %% all instructions in this block will be.
+    case regpress_classify_i(I) of
+        no_side_effect ->
+            #{ L:= Live } = Liveness,
+            R#b_blk{is=regpress_optimize_is(L, Is, Live)};
+        _ -> R
+    end;
+regpress_optimize_block(_, R, _) ->
+    R.
+
+regpress_optimize_is(_L, Is, {_LiveIn, LiveOut}) ->
+    %% io:format("Block: ~p~n", [L]),
+    %% io:format("live-in:~n~p~n", [LiveIn]),
+    %% io:format("live-out:~n~p~n", [LiveOut]),
+    %% io:format("in:~n~p~n", [Is]),
+
+    PDG = regpress_build_pdg(Is, LiveOut),
+
+    Out = Is,
+    %% io:format("out:~n~p~n", [Out]),
+
+    pdg_to_dot(PDG, "/tmp/dot/pdg-" ++ integer_to_list(_L)++".dot"),
+
+    regpress_transform_to_trees(PDG),
+    pdg_to_dot(PDG, "/tmp/dot/trees-" ++ integer_to_list(_L)++".dot"),
+    %% io:format("vertices: ~p~n", [digraph:vertices(PDG)]),
+    digraph:delete(PDG),
+    Out.
+
+%%%
+%%% Cut the PDG at fan-out nodes so we get a Forest of fan-in tree.
+%%%
+regpress_transform_to_trees(PDG) ->
+    foreach(fun(V) ->
+                    case digraph:out_edges(PDG, V) of
+                        [_,_|_]=Edges -> digraph:del_edges(PDG, Edges);
+                        _ -> true
+                    end
+            end,
+            digraph:vertices(PDG)).
+
+%%% Construct a program dependency graph
+regpress_build_pdg(Is, LiveOut) ->
+    G = digraph:new([acyclic]),
+    foreach(fun(I=#b_set{dst=Dst}) -> digraph:add_vertex(G, Dst, I) end, Is),
+    foreach(fun(I) -> regpress_add_pdg_use_edges(I, G) end, Is),
+    LiveOutUses = cerl_sets:to_list(LiveOut),
+    digraph:add_vertex(G, 'EXIT', {'EXIT', LiveOutUses}),
+    foreach(fun(U) ->
+                    regpress_add_pdg_use_edge(G, U, 'EXIT')
+            end, LiveOutUses),
+    G.
+
+regpress_add_pdg_use_edges(I=#b_set{dst=Dst}, G) ->
+    foreach(fun(U) ->
+                    regpress_add_pdg_use_edge(G, U, Dst)
+            end, beam_ssa:used(I)).
+
+regpress_add_pdg_use_edge(G, From, To) ->
+    case {digraph:vertex(G, From), digraph:vertex(G, To)} of
+        {{FV,_},{TV,_}} -> digraph:add_edge(G, FV, TV);
+        _ -> false
+    end.
+
+%%%
+%%% Make sure that all instructions having side effects are in their
+%%% own basic blocks.
+%%%
+regpress_split(Blocks, Count) ->
+    SplitPoints = regpress_split_points(Blocks),
+    F = fun(I) -> maps:is_key(I, SplitPoints) end,
+    beam_ssa:split_blocks(F, maps:from_list(Blocks), Count).
+
+%%%
+%%% Build a set of where to split the blocks. We split to get unbroken
+%%% sequences of phis, side-effect free instructions and instructions
+%%% with side effects.
+%%%
+regpress_split_points(Blocks) ->
+    regpress_split_points(Blocks, cerl_sets:new()).
+
+regpress_split_points([], Splits) ->
+    Splits;
+regpress_split_points([{_,#b_blk{is=[#b_set{op=phi}|Is]}}|Bs], Splits) ->
+    regpress_split_skip_phis(Is, Bs, Splits);
+regpress_split_points([{_,#b_blk{is=Is}}|Bs], Splits) ->
+    regpress_split_points(Is, Bs, Splits).
+
+%% Split after the last phi, unless the block only consists of phis.
+regpress_split_skip_phis([#b_set{op=phi}|Is], Bs, Splits) ->
+    regpress_split_skip_phis(Is, Bs, Splits);
+regpress_split_skip_phis([], Bs, Splits) ->
+    regpress_split_points(Bs, Splits);
+regpress_split_skip_phis([I|Is], Bs, Splits) ->
+    regpress_split_points(Is, Bs, cerl_sets:add_element(I, Splits)).
+
+regpress_split_points([], Bs, Splits) ->
+    regpress_split_points(Bs, Splits);
+regpress_split_points(Is, Bs, Splits) ->
+    regpress_split_points(Is, unknown, Bs, Splits).
+
+regpress_split_points([], _, Bs, Splits) ->
+    regpress_split_points(Bs, Splits);
+regpress_split_points([I|Is], Mode, Bs, Splits) ->
+    case {Mode, regpress_classify_i(I)} of
+        {_,no_split} ->
+            regpress_split_points(Is, Mode, Bs, Splits);
+        {unknown,NewMode} ->
+            regpress_split_points(Is, NewMode, Bs, Splits);
+        {Mode,Mode} ->
+            regpress_split_points(Is, Mode, Bs, Splits);
+        {Mode,NewMode} ->
+            regpress_split_points(Is, NewMode, Bs,
+                                  cerl_sets:add_element(I, Splits))
+    end.
+
+regpress_classify_i(#b_set{op=phi}) ->
+    phi;
+regpress_classify_i(#b_set{op={succeeded,_}}) ->
+    no_split;
+regpress_classify_i(I) ->
+    case beam_ssa:no_side_effect(I) of
+        true -> no_side_effect;
+        false -> side_effect
+    end.
+
+%%%
+%%% Undo the splits done by regpress_split/2
+%%%
+regpress_merge(BlockMap, Counter) ->
+    ToRemove = maps:fold(fun(L, _, Ls) when L >= Counter ->
+                                 [L|Ls];
+                            (_, _, Ls)  ->
+                                 Ls
+                         end, [], BlockMap),
+    Preds = beam_ssa:predecessors(BlockMap),
+    regpress_merge1(ToRemove, Preds, BlockMap).
+
+regpress_merge1([], _Preds, BlockMap) ->
+    beam_ssa:linearize(BlockMap);
+regpress_merge1([L|ToMerge], Preds0, BlockMap) ->
+    %% As this is a block we have split, it should only have one
+    %% predecessor and the predecessor should only have a single
+    %% successor.
+    #{ L := [P] } = Preds0,
+    #{ L := #b_blk{is=VictimIs,last=VictimLast}=Victim,
+       P := #b_blk{is=PredIs,
+                   last=#b_br{bool=#b_literal{val=true},succ=L,fail=L}}=Pred
+     } = BlockMap,
+    NewPred = Pred#b_blk{last=VictimLast,is=PredIs++VictimIs},
+    BlockMap1 = maps:remove(L, BlockMap#{ P := NewPred}),
+    Successors = beam_ssa:successors(Victim),
+    BlockMap2 = beam_ssa:update_phi_labels(Successors, L, P, BlockMap1),
+    Preds1 = foldl(fun(Succ, Preds) ->
+                           #{ Succ := Ps } = Preds,
+                           Preds#{ Succ := (Ps -- [L]) ++ [P] }
+                   end, Preds0, Successors),
+    regpress_merge1(ToMerge, Preds1, BlockMap2).
+
+%%%
+%%% hipe_dot does not handle nodes without edges properly, so roll our
+%%% own .dot dumper.
+%%%
+-spec pdg_to_dot(any(), any()) -> any().
+pdg_to_dot(Digraph, File) ->
+    Vs = digraph:vertices(Digraph),
+    VtoI = maps:from_list(lists:zip(Vs, lists:seq(1, length(Vs)))),
+    Data = ["digraph D {\n",
+            [pdg_to_dot_v(V, VtoI, Digraph) || V <- Vs],
+            [pdg_to_dot_e(E, VtoI, Digraph) || E <- digraph:edges(Digraph)],
+            "}\n"],
+
+    ok = file:write_file(File, Data).
+
+pdg_to_dot_v(V, VtoI, G) ->
+    #{ V := I } = VtoI,
+    {V, Label} = digraph:vertex(G, V),
+    io_lib:format("node~p [shape=box label=\"~w\"]~n", [I, Label]).
+
+pdg_to_dot_e(E, VtoI, G) ->
+    {E, V1, V2, _Label} = digraph:edge(G, E),
+    #{ V1 := I1, V2 := I2 } = VtoI,
+    io_lib:format("node~p -> node~p~n", [I1, I2]).
 
 %% Partition sinks for get_tuple_element instructions in the same
 %% clause extracting from the same tuple. Sort each partition in
