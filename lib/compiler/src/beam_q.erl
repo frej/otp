@@ -86,6 +86,15 @@ fold_is([{move,{x,_},{y,_}}|Is], Q) ->
 fold_is([{move,{y,_},{x,_}}|Is], Q) ->
     fold_is(Is, restore(i(Q)));
 
+fold_is([{swap,{x,_},{y,_}}|Is], Q) ->
+    fold_is(Is, restore(spill(i(Q))));
+fold_is([{swap,{y,_},{x,_}}|Is], Q) ->
+    fold_is(Is, spill(restore(i(Q))));
+fold_is([{move,{x,_},{x,_}}|Is], Q) ->
+    fold_is(Is, inc(xx_moves, inc(xx_moves, i(Q))));
+fold_is([{move,{y,_},{y,_}}|Is], Q) ->
+    fold_is(Is, inc(yy_moves, inc(yy_moves, i(Q))));
+
 fold_is([{init,{y,_}}|Is], Q) ->
     fold_is(Is, inc(y_init, i(Q)));
 fold_is([{kill,{y,_}}|Is], Q) ->
