@@ -2508,7 +2508,7 @@ regpress_optimize_block(_, R, _) ->
     R.
 
 regpress_optimize_is(_L, Is, {_LiveIn, LiveOut}) ->
-    %% io:format("Block: ~p~n", [L]),
+    %% io:format("Block: ~p~n", [_L]),
     %% io:format("live-in:~n~p~n", [LiveIn]),
     %% io:format("live-out:~n~p~n", [LiveOut]),
     %% io:format("in:~n~p~n", [Is]),
@@ -2520,23 +2520,55 @@ regpress_optimize_is(_L, Is, {_LiveIn, LiveOut}) ->
 
     pdg_to_dot(PDG, "/tmp/dot/pdg-" ++ integer_to_list(_L)++".dot"),
 
-    regpress_transform_to_trees(PDG),
-    pdg_to_dot(PDG, "/tmp/dot/trees-" ++ integer_to_list(_L)++".dot"),
+    TreeG = regpress_clone_pdg(PDG),
+    Trees = regpress_transform_to_trees(TreeG),
+
+    _RR = regpress_calc_rr(Trees, TreeG),
+    %% io:format("~p: ~p~n", [_L, RR]),
+
+    pdg_to_dot(TreeG, "/tmp/dot/trees-" ++ integer_to_list(_L)++".dot"),
     %% io:format("vertices: ~p~n", [digraph:vertices(PDG)]),
     digraph:delete(PDG),
+    digraph:delete(TreeG),
     Out.
 
 %%%
-%%% Cut the PDG at fan-out nodes so we get a Forest of fan-in tree.
+%%% Calculate the register-requirement for each node of the
+%%% trees. Return the results in a map, mapping a node to its
+%%% requirement.
+%%%
+regpress_calc_rr(Trees, PDG) ->
+    foldl(fun(Tree, Acc) -> regpress_calc_rr_rec(Tree, Acc, PDG) end,
+          #{}, Trees).
+
+regpress_calc_rr_rec(V, Requirements, PDG) ->
+    case digraph:in_neighbours(PDG, V) of
+        [] ->
+            Requirements#{V => 0};
+        Neighbours ->
+            Reqs = foldl(fun(N, Acc) -> regpress_calc_rr_rec(N, Acc, PDG) end,
+                         Requirements, Neighbours),
+            RRs = lists:sort([maps:get(N, Reqs) || N <- Neighbours]),
+            K = length(RRs),
+            Costs = [ X + K - I || {I,X} <- lists:zip(lists:seq(1, K), RRs)],
+            Reqs#{ V => lists:max(Costs) }
+    end.
+
+%%%
+%%% Cut the PDG at fan-out nodes so we get a Forest of fan-in
+%%% tree. Return the list of roots.
 %%%
 regpress_transform_to_trees(PDG) ->
-    foreach(fun(V) ->
+    foldl(fun(V, Acc) ->
                     case digraph:out_edges(PDG, V) of
-                        [_,_|_]=Edges -> digraph:del_edges(PDG, Edges);
-                        _ -> true
+                        [_,_|_]=Edges ->
+                            digraph:del_edges(PDG, Edges),
+                            [V|Acc]; % V becomes a root node
+                        [] ->
+                            [V|Acc]; % V is a root node
+                        _ -> Acc
                     end
-            end,
-            digraph:vertices(PDG)).
+            end, [], digraph:vertices(PDG)).
 
 %%% Construct a program dependency graph
 regpress_build_pdg(Is, LiveOut) ->
@@ -2560,6 +2592,18 @@ regpress_add_pdg_use_edge(G, From, To) ->
         {{FV,_},{TV,_}} -> digraph:add_edge(G, FV, TV);
         _ -> false
     end.
+
+regpress_clone_pdg(G) ->
+    N = digraph:new([acyclic]),
+    foreach(fun(V) ->
+                    {V,Lbl} = digraph:vertex(G, V),
+                    digraph:add_vertex(N, V, Lbl)
+            end, digraph:vertices(G)),
+    foreach(fun(E) ->
+                    {E,V1,V2,Lbl} = digraph:edge(G, E),
+                    digraph:add_edge(N, V1, V2, Lbl)
+            end, digraph:edges(G)),
+    N.
 
 %%%
 %%% Make sure that all instructions having side effects are in their
