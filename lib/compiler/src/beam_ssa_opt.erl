@@ -300,11 +300,11 @@ epilogue_passes(Opts) ->
 
           %% Run live one more time to clean up after the previous
           %% epilogue passes.
-          ?PASS(ssa_opt_regpress),
           ?PASS(ssa_opt_live),
           ?PASS(ssa_opt_bsm),
           ?PASS(ssa_opt_bsm_shortcut),
           ?PASS(ssa_opt_sink),
+          ?PASS(ssa_opt_regpress),
           ?PASS(ssa_opt_blockify),
           ?PASS(ssa_opt_merge_blocks),
           ?PASS(ssa_opt_get_tuple_element),
@@ -2481,7 +2481,6 @@ ssa_opt_regpress({#opt_st{ssa=Linear,cnt=Counter}=St, FuncDb}) ->
     %% io:format("linear:~n~p~n", [Linear]),
     %% io:format("split:~n~p~n", [Split]),
     Merged = regpress_merge(Split, Counter),
-    Merged = Linear,
     %% io:format("merged:~n~p~n", [Merged]),
     {St#opt_st{ssa=Merged,cnt=Counter1},FuncDb}.
 
@@ -2518,27 +2517,91 @@ regpress_optimize_is(_L, Is, LastUses, {_LiveIn, LiveOut}) ->
 
     PDG = regpress_build_pdg(Is, LastUses, LiveOut),
 
-    Out = Is,
     %% io:format("out:~n~p~n", [Out]),
 
-    pdg_to_dot(PDG, "/tmp/dot/pdg-" ++ integer_to_list(_L)++".dot"),
+    %pdg_to_dot(PDG, "/tmp/dot/pdg-" ++ integer_to_list(_L)++".dot"),
 
     TreeG = regpress_clone_pdg(PDG),
     Trees = regpress_transform_to_trees(TreeG),
 
-    _RR = regpress_calc_rr(Trees, TreeG),
-    %% io:format("~p: ~p~n", [_L, RR]),
+    RR = regpress_calc_rr(Trees, TreeG),
+    %io:format("~p: ~p~n", [_L, RR]),
 
-    pdg_to_dot(TreeG, "/tmp/dot/trees-" ++ integer_to_list(_L)++".dot"),
+    %pdg_to_dot(TreeG, "/tmp/dot/trees-" ++ integer_to_list(_L)++".dot"),
     %% io:format("vertices: ~p~n", [digraph:vertices(PDG)]),
 
-%    io:format("=== EST ~p ===~n", [_L]),
-    _EST = regpress_calc_est(PDG),
-%    io:format("EST: ~p: ~p~n", [_L, EST]),
+    EST = regpress_calc_est(PDG),
+    %io:format("EST: ~p: ~p~n", [_L, EST]),
+
+    ['EXIT'|Schedule] = pdg_schedule(PDG, TreeG, EST, RR),
+    X = length(Is),
+    X = length(Schedule),
+
+    Out = reverse([begin {_, I} = digraph:vertex(PDG, V), I end
+                   || V <- Schedule]),
+
+    %% case Out of
+    %%     Is -> ok;
+    %%     _ -> io:format("=== Schedule ~p ===~n in: ~p~n", [_L, Is]),
+    %%          io:format("  out: ~p~n", [Out])
+    %% end,
 
     digraph:delete(PDG),
     digraph:delete(TreeG),
     Out.
+
+
+%%%
+%%% 
+%%%
+pdg_schedule(PDG, FanInTrees, EST, RR) ->
+    Ready = foldl(fun(V, ReadyAcc) ->
+                          #{ V := E } = EST,
+                          #{ V := R } = RR,
+                          case {digraph:out_degree(PDG, V),
+                                digraph:out_degree(FanInTrees, V)} of
+                              {0, 0} ->
+                                  [{V,inf,R,-E}|ReadyAcc];
+                              {0, _} ->
+                                  [{V,0,R,-E}|ReadyAcc];
+                              {_, 0} ->
+                                  [{V,inf,R,-E}|ReadyAcc];
+                              _ ->
+                                  ReadyAcc
+                          end
+                  end, [], digraph:vertices(PDG)),
+    pdg_schedule(Ready, digraph:no_vertices(PDG), PDG, FanInTrees, EST, RR).
+
+pdg_schedule([], _J, _PDG, _FanInTrees, _EST, _RR) ->
+    [];
+pdg_schedule(Ready, J, PDG, FanInTrees, EST, RR) ->
+    %% TODO: This has terrible performance
+    Ready1 = lists:sort(fun({_,A0,A1,A2}, {_,B0,B1,B2}) ->
+                                infmin(A0, A1, A2) < infmin(B0, B1, B2)
+                        end, Ready),
+%    io:format("Schedule: ~p~n", [Ready1]),
+    [{Next,_,_,_}|Rest] = Ready1,
+
+    Children = digraph:in_neighbours(FanInTrees, Next),
+    Children1 = [begin
+                     #{ C := E } = EST,
+                     #{ C := R } = RR,
+                     {C,J,R,-E}
+                 end || C <- Children],
+ %   io:format("!! ~p~n", [Children1]),
+
+    [Next|pdg_schedule(Rest ++ Children1, J - 1, PDG, FanInTrees, EST, RR)].
+
+%% As min/2 but handles 'inf' as a value
+infmin(inf, B) ->
+    B;
+infmin(A, B) when A < B ->
+    A;
+infmin(_, B) ->
+    B.
+
+infmin(A, B, C) ->
+    infmin(infmin(A, B), C).
 
 %%%
 %%% Calculate the earliest starting time (EST) for the PDG. Return the
