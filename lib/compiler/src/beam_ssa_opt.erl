@@ -2493,6 +2493,12 @@ regpress_optimize_blocks(Split, Liveness) ->
                      regpress_optimize_block(L, Region, Liveness)
              end, Split).
 
+regpress_optimize_block(_,
+                        R=#b_blk{is=[#b_set{dst=X},
+                                     #b_set{dst=Y,op={succeeded,_},args=[X]}],
+                                 last=#b_br{bool=Y}}, _) ->
+    %% This is guard so leave it alone
+    R;
 regpress_optimize_block(L, R=#b_blk{is=[I,_|_]=Is,last=Last}, Liveness) ->
     %% need at least two instructions and both of them to be
     %% side-effect free. Due to our splitting logic, it is sufficent
@@ -2685,41 +2691,71 @@ regpress_split_points(Blocks) ->
 
 regpress_split_points([], Splits) ->
     Splits;
-regpress_split_points([{_,#b_blk{is=[#b_set{op=phi}|Is]}}|Bs], Splits) ->
-    regpress_split_skip_phis(Is, Bs, Splits);
-regpress_split_points([{_,#b_blk{is=Is}}|Bs], Splits) ->
-    regpress_split_points(Is, Bs, Splits).
+regpress_split_points([{_,#b_blk{is=[#b_set{op=phi}|Is],last=L}}|Bs], Splits) ->
+    regpress_split_skip_phis(Is, L, Bs, Splits);
+regpress_split_points([{_,#b_blk{is=Is,last=L}}|Bs], Splits) ->
+    regpress_split_points(Is, L, Bs, Splits).
 
 %% Split after the last phi, unless the block only consists of phis.
-regpress_split_skip_phis([#b_set{op=phi}|Is], Bs, Splits) ->
-    regpress_split_skip_phis(Is, Bs, Splits);
-regpress_split_skip_phis([], Bs, Splits) ->
+regpress_split_skip_phis([#b_set{op=phi}|Is], Last, Bs, Splits) ->
+    regpress_split_skip_phis(Is, Last, Bs, Splits);
+regpress_split_skip_phis([], _, Bs, Splits) ->
     regpress_split_points(Bs, Splits);
-regpress_split_skip_phis([I|Is], Bs, Splits) ->
-    regpress_split_points(Is, Bs, cerl_sets:add_element(I, Splits)).
-
-regpress_split_points([], Bs, Splits) ->
-    regpress_split_points(Bs, Splits);
-regpress_split_points(Is, Bs, Splits) ->
-    regpress_split_points(Is, unknown, Bs, Splits).
+regpress_split_skip_phis([I|Is], Last, Bs, Splits) ->
+    regpress_split_points(Is, Last, Bs, cerl_sets:add_element(I, Splits)).
 
 regpress_split_points([], _, Bs, Splits) ->
     regpress_split_points(Bs, Splits);
-regpress_split_points([I|Is], Mode, Bs, Splits) ->
+regpress_split_points(Is, Last, Bs, Splits) ->
+    regpress_split_points(Is, unknown, Last, Bs, Splits).
+
+regpress_split_points([], _, _, Bs, Splits) ->
+    regpress_split_points(Bs, Splits);
+
+regpress_split_points([I=#b_set{dst=X},#b_set{dst=Y,op={succeeded,_},args=[X]}],
+                      _, #b_br{bool=Y}, Bs, Splits) ->
+    regpress_split_points(Bs, cerl_sets:add_element(I, Splits));
+regpress_split_points([I=#b_set{dst=D}], _, #b_br{bool=D}, Bs, Splits) ->
+    regpress_split_points(Bs, cerl_sets:add_element(I, Splits));
+regpress_split_points([I=#b_set{dst=D}], _, #b_switch{arg=D}, Bs, Splits) ->
+    regpress_split_points(Bs, cerl_sets:add_element(I, Splits));
+regpress_split_points([I|Is], Mode, Last, Bs, Splits) ->
     case {Mode, regpress_classify_i(I)} of
         {_,no_split} ->
-            regpress_split_points(Is, Mode, Bs, Splits);
+            regpress_split_points(Is, Mode, Last, Bs, Splits);
         {unknown,NewMode} ->
-            regpress_split_points(Is, NewMode, Bs, Splits);
+            regpress_split_points(Is, NewMode, Last, Bs, Splits);
         {Mode,Mode} ->
-            regpress_split_points(Is, Mode, Bs, Splits);
+            regpress_split_points(Is, Mode, Last, Bs, Splits);
         {Mode,NewMode} ->
-            regpress_split_points(Is, NewMode, Bs,
+            regpress_split_points(Is, NewMode, Last, Bs,
                                   cerl_sets:add_element(I, Splits))
     end.
 
 regpress_classify_i(#b_set{op=phi}) ->
     phi;
+regpress_classify_i(#b_set{op=bs_add}) ->
+    side_effect;
+regpress_classify_i(#b_set{op=bs_init}) ->
+    side_effect;
+regpress_classify_i(#b_set{op=bs_init_writable}) ->
+    side_effect;
+regpress_classify_i(#b_set{op=bs_extract}) ->
+    side_effect;
+regpress_classify_i(#b_set{op=bs_match}) ->
+    side_effect;
+regpress_classify_i(#b_set{op=bs_start_match}) ->
+    side_effect;
+regpress_classify_i(#b_set{op=bs_test_tail}) ->
+    side_effect;
+regpress_classify_i(#b_set{op=bs_get_tail}) ->
+    side_effect;
+regpress_classify_i(#b_set{op=bs_put}) ->
+    side_effect;
+regpress_classify_i(#b_set{op=bs_utf16_size}) ->
+    side_effect;
+regpress_classify_i(#b_set{op=bs_utf8_size}) ->
+    side_effect;
 regpress_classify_i(#b_set{op={succeeded,_}}) ->
     no_split;
 regpress_classify_i(I) ->
