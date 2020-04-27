@@ -2493,7 +2493,7 @@ regpress_optimize_blocks(Split, Liveness) ->
                      regpress_optimize_block(L, Region, Liveness)
              end, Split).
 
-regpress_optimize_block(L, R=#b_blk{is=[I,_|_]=Is}, Liveness) ->
+regpress_optimize_block(L, R=#b_blk{is=[I,_|_]=Is,last=Last}, Liveness) ->
     %% need at least two instructions and both of them to be
     %% side-effect free. Due to our splitting logic, it is sufficent
     %% to check the first instruction as, if it is side-effect free
@@ -2501,19 +2501,19 @@ regpress_optimize_block(L, R=#b_blk{is=[I,_|_]=Is}, Liveness) ->
     case regpress_classify_i(I) of
         no_side_effect ->
             #{ L:= Live } = Liveness,
-            R#b_blk{is=regpress_optimize_is(L, Is, Live)};
+            R#b_blk{is=regpress_optimize_is(L, Is, beam_ssa:used(Last), Live)};
         _ -> R
     end;
 regpress_optimize_block(_, R, _) ->
     R.
 
-regpress_optimize_is(_L, Is, {_LiveIn, LiveOut}) ->
+regpress_optimize_is(_L, Is, LastUses, {_LiveIn, LiveOut}) ->
     %% io:format("Block: ~p~n", [_L]),
     %% io:format("live-in:~n~p~n", [LiveIn]),
     %% io:format("live-out:~n~p~n", [LiveOut]),
     %% io:format("in:~n~p~n", [Is]),
 
-    PDG = regpress_build_pdg(Is, LiveOut),
+    PDG = regpress_build_pdg(Is, LastUses, LiveOut),
 
     Out = Is,
     %% io:format("out:~n~p~n", [Out]),
@@ -2571,15 +2571,22 @@ regpress_transform_to_trees(PDG) ->
             end, [], digraph:vertices(PDG)).
 
 %%% Construct a program dependency graph
-regpress_build_pdg(Is, LiveOut) ->
+regpress_build_pdg(Is, LastUses, LiveOut) ->
     G = digraph:new([acyclic]),
     foreach(fun(I=#b_set{dst=Dst}) -> digraph:add_vertex(G, Dst, I) end, Is),
     foreach(fun(I) -> regpress_add_pdg_use_edges(I, G) end, Is),
     LiveOutUses = cerl_sets:to_list(LiveOut),
-    digraph:add_vertex(G, 'EXIT', {'EXIT', LiveOutUses}),
+    digraph:add_vertex(
+      G, 'EXIT',
+      {'EXIT',
+       cerl_sets:to_list(cerl_sets:from_list(LiveOutUses ++ LastUses))}),
     foreach(fun(U) ->
                     regpress_add_pdg_use_edge(G, U, 'EXIT')
             end, LiveOutUses),
+    foreach(fun(U) ->
+                    regpress_add_pdg_lastuse_edge(G, U, 'EXIT')
+            end, LastUses),
+
     G.
 
 regpress_add_pdg_use_edges(I=#b_set{dst=Dst}, G) ->
@@ -2590,6 +2597,19 @@ regpress_add_pdg_use_edges(I=#b_set{dst=Dst}, G) ->
 regpress_add_pdg_use_edge(G, From, To) ->
     case {digraph:vertex(G, From), digraph:vertex(G, To)} of
         {{FV,_},{TV,_}} -> digraph:add_edge(G, FV, TV);
+        _ -> false
+    end.
+
+regpress_add_pdg_lastuse_edge(G, From, To) ->
+    case {digraph:vertex(G, From), digraph:vertex(G, To)} of
+        {{FV,_},{TV,_}} ->
+            case digraph:get_path(G, FV, TV) of
+                false ->
+                    digraph:add_edge(G, FV, TV);
+                _ ->
+                    %% Redundant, exit already depends on this value
+                    false
+            end;
         _ -> false
     end.
 
