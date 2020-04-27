@@ -2528,9 +2528,50 @@ regpress_optimize_is(_L, Is, LastUses, {_LiveIn, LiveOut}) ->
 
     pdg_to_dot(TreeG, "/tmp/dot/trees-" ++ integer_to_list(_L)++".dot"),
     %% io:format("vertices: ~p~n", [digraph:vertices(PDG)]),
+
+%    io:format("=== EST ~p ===~n", [_L]),
+    _EST = regpress_calc_est(PDG),
+%    io:format("EST: ~p: ~p~n", [_L, EST]),
+
     digraph:delete(PDG),
     digraph:delete(TreeG),
     Out.
+
+%%%
+%%% Calculate the earliest starting time (EST) for the PDG. Return the
+%%% results in a map, mapping a node to its EST.
+%%%
+regpress_calc_est(PDG) ->
+    foldl(fun(V, EST) ->
+                  {_,R} = regpress_calc_est_rec(V, EST, PDG),
+                  R
+          end, #{}, digraph:vertices(PDG)).
+
+regpress_calc_est_rec(V, Est, PDG) ->
+%    io:format("regpress_calc_est_rec(~p)~n", [V]),
+    case Est of
+        #{ V := S } ->
+ %           io:format("  (cached) regpress_calc_est_rec(~p) -> ~p~n", [V, S]),
+            {S,Est};
+        _ ->
+            case digraph:in_neighbours(PDG, V) of
+                [] ->
+%                    io:format("  (leaf) regpress_calc_est_rec(~p) -> ~p~n", [V, 0]),
+                    {0,Est#{ V => 0}};
+                Preds ->
+%                    io:format("  (preds: ~p)~n", [Preds]),
+                    R = {_S,_} = regpress_calc_est_rec(V, Preds, Est, PDG),
+%                    io:format("  regpress_calc_est_rec(~p) -> ~p~n", [V,S]),
+                    R
+            end
+    end.
+
+regpress_calc_est_rec(V, Preds, Est0, PDG) ->
+    {C,Est2} = foldl(fun(P, {Max,Est}) ->
+                             {S,Est1} = regpress_calc_est_rec(P, Est, PDG),
+                             {max(S + 1, Max), Est1}
+                     end, {0,Est0}, Preds),
+    {C, Est2#{V => C}}.
 
 %%%
 %%% Calculate the register-requirement for each node of the
