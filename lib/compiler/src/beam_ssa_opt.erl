@@ -2511,39 +2511,55 @@ regpress_optimize_block(_, R, _) ->
 
 regpress_optimize_is(_L, Is, LastUses, {_LiveIn, LiveOut}) ->
     %% io:format("Block: ~p~n", [_L]),
-    %% io:format("live-in:~n~p~n", [LiveIn]),
+    %% io:format("live-in:~n~p~n", [_LiveIn]),
     %% io:format("live-out:~n~p~n", [LiveOut]),
     %% io:format("in:~n~p~n", [Is]),
 
-    PDG = regpress_build_pdg(Is, LastUses, LiveOut),
+    PDG = regpress_build_pdg(Is, LastUses, _LiveIn, LiveOut),
 
     %% io:format("out:~n~p~n", [Out]),
 
-    %pdg_to_dot(PDG, "/tmp/dot/pdg-" ++ integer_to_list(_L)++".dot"),
+    %% pdg_to_dot(PDG, "/tmp/dot/pdg-" ++ integer_to_list(_L)++".dot"),
 
     TreeG = regpress_clone_pdg(PDG),
+    %% pdg_to_dot(TreeG, "/tmp/dot/cloned-pdg-" ++ integer_to_list(_L)++".dot"),
     Trees = regpress_transform_to_trees(TreeG),
 
     RR = regpress_calc_rr(Trees, TreeG),
-    %io:format("~p: ~p~n", [_L, RR]),
+    %% io:format("RR: ~p: ~p~n", [_L, RR]),
 
-    %pdg_to_dot(TreeG, "/tmp/dot/trees-" ++ integer_to_list(_L)++".dot"),
+    %% pdg_to_dot(TreeG, "/tmp/dot/trees-" ++ integer_to_list(_L)++".dot"),
     %% io:format("vertices: ~p~n", [digraph:vertices(PDG)]),
 
     EST = regpress_calc_est(PDG),
-    %io:format("EST: ~p: ~p~n", [_L, EST]),
+    %% io:format("EST: ~p: ~p~n", [_L, EST]),
+    Schedule = pdg_schedule(PDG, TreeG, EST, RR),
 
-    ['EXIT'|Schedule] = pdg_schedule(PDG, TreeG, EST, RR),
+    Out = foldl(fun(V, Acc) ->
+                        case digraph:vertex(PDG, V) of
+                            {V,{'EXIT',_}} -> Acc;
+                            {V,{'LIVE-IN',V}} -> Acc;
+                            {V, I} -> [I|Acc]
+                        end
+                end, [], Schedule),
     X = length(Is),
-    X = length(Schedule),
 
-    Out = reverse([begin {_, I} = digraph:vertex(PDG, V), I end
-                   || V <- Schedule]),
+    case length(Out) of
+        X -> ok;
+        _ -> io:format("=== Bad schedule ~p ===~n in: ~p~n", [_L, Is]),
+             io:format("  out: ~p~n", [Out]),
+             io:format("  live-in:~n  ~p~n", [_LiveIn]),
+             io:format("  live-out:~n  ~p~n", [LiveOut])
+    end,
+
+    X = length(Out),
 
     %% case Out of
     %%     Is -> ok;
     %%     _ -> io:format("=== Schedule ~p ===~n in: ~p~n", [_L, Is]),
-    %%          io:format("  out: ~p~n", [Out])
+    %%          io:format("  out: ~p~n", [Out]),
+    %%          io:format("  live-in:~n  ~p~n", [_LiveIn]),
+    %%          io:format("  live-out:~n  ~p~n", [LiveOut])
     %% end,
 
     digraph:delete(PDG),
@@ -2555,53 +2571,84 @@ regpress_optimize_is(_L, Is, LastUses, {_LiveIn, LiveOut}) ->
 %%% 
 %%%
 pdg_schedule(PDG, FanInTrees, EST, RR) ->
-    Ready = foldl(fun(V, ReadyAcc) ->
-                          #{ V := E } = EST,
-                          #{ V := R } = RR,
-                          case {digraph:out_degree(PDG, V),
-                                digraph:out_degree(FanInTrees, V)} of
-                              {0, 0} ->
-                                  [{V,inf,R,-E}|ReadyAcc];
-                              {0, _} ->
-                                  [{V,0,R,-E}|ReadyAcc];
-                              {_, 0} ->
-                                  [{V,inf,R,-E}|ReadyAcc];
-                              _ ->
-                                  ReadyAcc
-                          end
-                  end, [], digraph:vertices(PDG)),
+    %% Ready = foldl(fun(V, ReadyAcc) ->
+    %%                       #{ V := E } = EST,
+    %%                       #{ V := R } = RR,
+    %%                       case {digraph:out_degree(PDG, V),
+    %%                             digraph:out_degree(FanInTrees, V)} of
+    %%                           {0, 0} ->
+    %%                               [{V,inf,R,-E}|ReadyAcc];
+    %%                           {0, _} ->
+    %%                               [{V,0,R,-E}|ReadyAcc];
+    %%                           {_, 0} ->
+    %%                               [{V,inf,R,-E}|ReadyAcc];
+    %%                           _ ->
+    %%                               ReadyAcc
+    %%                       end
+    %%               end, [], digraph:vertices(PDG)),
+    V = 'EXIT',
+    #{ V := E } = EST,
+    #{ V := R } = RR,
+    Ready = #{V => {inf,R,-E}},
+    %% io:format("Initial ready set: ~p~n", [Ready]),
     pdg_schedule(Ready, digraph:no_vertices(PDG), PDG, FanInTrees, EST, RR).
 
-pdg_schedule([], _J, _PDG, _FanInTrees, _EST, _RR) ->
-    [];
 pdg_schedule(Ready, J, PDG, FanInTrees, EST, RR) ->
     %% TODO: This has terrible performance
-    Ready1 = lists:sort(fun({_,A0,A1,A2}, {_,B0,B1,B2}) ->
-                                infmin(A0, A1, A2) < infmin(B0, B1, B2)
-                        end, Ready),
-%    io:format("Schedule: ~p~n", [Ready1]),
-    [{Next,_,_,_}|Rest] = Ready1,
+    ReadyLs = lists:sort(fun({_,{A0,A1,A2}}, {_,{B0,B1,B2}}) ->
+                                 infcmp({A0, A1, A2}, {B0, B1, B2})
+                         end, maps:to_list(Ready)),
+    %% io:format("New round, ready:: ~p~n", [ReadyLs]),
+    case ReadyLs of
+        [] -> [];
+        [{Next,{_,_,_}}|_] ->
+            %% io:format("!! ~p pushed on schedule~n", [Next]),
+            Ready1 = pdg_add_ready_children(Next, J, maps:remove(Next, Ready),
+                                            PDG, FanInTrees, EST, RR),
+            %% io:format("!! new ready ~p~n", [Ready1]),
+            [Next|pdg_schedule(Ready1, J - 1, PDG, FanInTrees, EST, RR)]
+    end.
 
-    Children = digraph:in_neighbours(FanInTrees, Next),
-    Children1 = [begin
-                     #{ C := E } = EST,
-                     #{ C := R } = RR,
-                     {C,J,R,-E}
-                 end || C <- Children],
- %   io:format("!! ~p~n", [Children1]),
+pdg_add_ready_children(Parent, J, Ready, PDG, FanInTrees, EST, RR) ->
+    Cs = digraph:in_neighbours(PDG, Parent),
+    foldl(fun(C, Acc) ->
+                  #{ C := E } = EST,
+                  %% io:format("!! ~p~n", [C]),
+                  #{ C := R } = RR,
+                  %% io:format("<< ~p := ~p~n", [C, R]),
+                  Idx = case digraph:out_degree(FanInTrees, C) of
+                            0 -> inf;
+                            _ -> J
+                        end,
+                  Acc#{ C => {Idx,R,-E} }
+          end,
+          Ready, Cs).
 
-    [Next|pdg_schedule(Rest ++ Children1, J - 1, PDG, FanInTrees, EST, RR)].
+%% %% As min/2 but handles 'inf' as a value
+%% infmin(inf, B) ->
+%%     B;
+%% infmin(A, B) when A < B ->
+%%     A;
+%% infmin(_, B) ->
+%%     B.
 
-%% As min/2 but handles 'inf' as a value
-infmin(inf, B) ->
-    B;
-infmin(A, B) when A < B ->
-    A;
-infmin(_, B) ->
-    B.
+%% infmin(A, B, C) ->
+%%     infmin(infmin(A, B), C).
 
-infmin(A, B, C) ->
-    infmin(infmin(A, B), C).
+infcmp({A0,A1,A2}, {B0,B1,B2}) ->
+    infcmp1([A0,A1,A2],[B0,B1,B2]).
+
+infcmp1([X], [Y]) ->
+    X < Y;
+infcmp1([X|Xs], [X|Ys]) ->
+    infcmp1(Xs, Ys);
+infcmp1([X|_], [Y|_]) ->
+    X < Y.
+
+%% infcmp1(B, C0, B, C1) ->
+%%     C0 < C1;
+%% infcmp1(B0, _, B1, _) ->
+%%     B0 < B1.
 
 %%%
 %%% Calculate the earliest starting time (EST) for the PDG. Return the
@@ -2623,6 +2670,10 @@ regpress_calc_est_rec(V, Est, PDG) ->
             case digraph:in_neighbours(PDG, V) of
                 [] ->
 %                    io:format("  (leaf) regpress_calc_est_rec(~p) -> ~p~n", [V, 0]),
+                    %% case digraph:vertex(PDG, V) of
+                    %%     {V, {'LIVE-IN', V}} -> {-1,Est#{ V => -1}};
+                    %%     _ -> {0,Est#{ V => 0}}
+                    %% end;
                     {0,Est#{ V => 0}};
                 Preds ->
 %                    io:format("  (preds: ~p)~n", [Preds]),
@@ -2667,20 +2718,24 @@ regpress_calc_rr_rec(V, Requirements, PDG) ->
 %%%
 regpress_transform_to_trees(PDG) ->
     foldl(fun(V, Acc) ->
-                    case digraph:out_edges(PDG, V) of
-                        [_,_|_]=Edges ->
-                            digraph:del_edges(PDG, Edges),
-                            [V|Acc]; % V becomes a root node
-                        [] ->
-                            [V|Acc]; % V is a root node
-                        _ -> Acc
-                    end
-            end, [], digraph:vertices(PDG)).
+                  Out = digraph:out_edges(PDG, V),
+                  case Out of
+                      [_,_|_]=Edges ->
+                          digraph:del_edges(PDG, Edges),
+                          [V|Acc]; % V becomes a root node
+                      [] ->
+                          [V|Acc]; % V is a root node
+                      _ ->
+                          Acc
+                  end
+          end, [], digraph:vertices(PDG)).
 
 %%% Construct a program dependency graph
-regpress_build_pdg(Is, LastUses, LiveOut) ->
+regpress_build_pdg(Is, LastUses, LiveIn, LiveOut) ->
     G = digraph:new([acyclic]),
     foreach(fun(I=#b_set{dst=Dst}) -> digraph:add_vertex(G, Dst, I) end, Is),
+    foreach(fun(V) -> digraph:add_vertex(G, V, {'LIVE-IN', V}) end,
+            cerl_sets:to_list(LiveIn)),
     foreach(fun(I) -> regpress_add_pdg_use_edges(I, G) end, Is),
     LiveOutUses = cerl_sets:to_list(LiveOut),
     digraph:add_vertex(
@@ -2754,7 +2809,7 @@ regpress_split_points([], Splits) ->
 regpress_split_points([{_,#b_blk{is=[#b_set{op=phi}|Is],last=L}}|Bs], Splits) ->
     regpress_split_skip_phis(Is, L, Bs, Splits);
 regpress_split_points([{_,#b_blk{is=Is,last=L}}|Bs], Splits) ->
-    regpress_split_points(Is, L, Bs, Splits).
+    regpress_split_points(Is, unknown, L, Bs, Splits).
 
 %% Split after the last phi, unless the block only consists of phis.
 regpress_split_skip_phis([#b_set{op=phi}|Is], Last, Bs, Splits) ->
@@ -2762,12 +2817,7 @@ regpress_split_skip_phis([#b_set{op=phi}|Is], Last, Bs, Splits) ->
 regpress_split_skip_phis([], _, Bs, Splits) ->
     regpress_split_points(Bs, Splits);
 regpress_split_skip_phis([I|Is], Last, Bs, Splits) ->
-    regpress_split_points(Is, Last, Bs, cerl_sets:add_element(I, Splits)).
-
-regpress_split_points([], _, Bs, Splits) ->
-    regpress_split_points(Bs, Splits);
-regpress_split_points(Is, Last, Bs, Splits) ->
-    regpress_split_points(Is, unknown, Last, Bs, Splits).
+    regpress_split_points(Is, regpress_classify_i(I), Last, Bs, cerl_sets:add_element(I, Splits)).
 
 regpress_split_points([], _, _, Bs, Splits) ->
     regpress_split_points(Bs, Splits);
@@ -2794,6 +2844,8 @@ regpress_split_points([I|Is], Mode, Last, Bs, Splits) ->
 
 regpress_classify_i(#b_set{op=phi}) ->
     phi;
+regpress_classify_i(#b_set{op=kill_try_tag}) ->
+    side_effect;
 regpress_classify_i(#b_set{op=bs_add}) ->
     side_effect;
 regpress_classify_i(#b_set{op=bs_init}) ->
