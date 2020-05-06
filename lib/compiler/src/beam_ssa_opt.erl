@@ -2490,6 +2490,17 @@ used_blocks([{L,Blk}|Bs], Def, Acc0) ->
 used_blocks([], _Def, Acc) ->
     rel2fam(Acc).
 
+%-define(REGPRESSDEBUG, true).
+
+-ifdef(REGPRESSDEBUG).
+-define(regpressdbg(__String, __Args), io:format(__String, __Args)).
+-define(regpressdbg_to_dot(__DG, __FN), pdg_to_dot(__DG, __FN)).
+-else.
+-define(regpressdbg(__String, __Args), ok).
+-define(regpressdbg_to_dot(__DG, __FN), ok).
+-endif.
+
+
 -spec ssa_opt_regpress(any()) -> any().
 ssa_opt_regpress({#opt_st{ssa=Linear,cnt=Counter}=St, FuncDb}) ->
     {Split0,Counter1} = regpress_split(Linear, Counter),
@@ -2527,29 +2538,24 @@ regpress_optimize_block(_, R, _) ->
     R.
 
 regpress_optimize_is(_L, Is, LastUses, {_LiveIn, LiveOut}) ->
-    %% io:format("Block: ~p~n", [_L]),
+    ?regpressdbg("Block: ~p~n", [_L]),
     %% io:format("live-in:~n~p~n", [_LiveIn]),
     %% io:format("live-out:~n~p~n", [LiveOut]),
     %% io:format("in:~n~p~n", [Is]),
 
     PDG = regpress_build_pdg(Is, LastUses, _LiveIn, LiveOut),
-
-    %% io:format("out:~n~p~n", [Out]),
-
-    %% pdg_to_dot(PDG, "/tmp/dot/pdg-" ++ integer_to_list(_L)++".dot"),
+    ?regpressdbg_to_dot(PDG, "/tmp/dot/pdg-" ++ integer_to_list(_L)++".dot"),
 
     TreeG = regpress_clone_pdg(PDG),
-    %% pdg_to_dot(TreeG, "/tmp/dot/cloned-pdg-" ++ integer_to_list(_L)++".dot"),
     Trees = regpress_transform_to_trees(TreeG),
 
     RR = regpress_calc_rr(Trees, TreeG),
-    %% io:format("RR: ~p: ~p~n", [_L, RR]),
-
-    %% pdg_to_dot(TreeG, "/tmp/dot/trees-" ++ integer_to_list(_L)++".dot"),
-    %% io:format("vertices: ~p~n", [digraph:vertices(PDG)]),
+    ?regpressdbg("RR: ~p: ~p~n", [_L, RR]),
+    ?regpressdbg_to_dot(TreeG,
+                        "/tmp/dot/trees-" ++ integer_to_list(_L)++".dot"),
 
     EST = regpress_calc_est(PDG),
-    %% io:format("EST: ~p: ~p~n", [_L, EST]),
+    ?regpressdbg("EST: ~p: ~p~n", [_L, EST]),
     Schedule = pdg_schedule(PDG, TreeG, EST, RR),
 
     Out = foldl(fun(V, Acc) ->
@@ -2607,7 +2613,7 @@ pdg_schedule(PDG, FanInTrees, EST, RR) ->
     #{ V := E } = EST,
     #{ V := R } = RR,
     Ready = #{V => {inf,R,-E}},
-    %% io:format("Initial ready set: ~p~n", [Ready]),
+    ?regpressdbg("Initial ready set: ~p~n", [Ready]),
     pdg_schedule(Ready, digraph:no_vertices(PDG), PDG, FanInTrees, EST, RR).
 
 pdg_schedule(Ready, J, PDG, FanInTrees, EST, RR) ->
@@ -2615,14 +2621,14 @@ pdg_schedule(Ready, J, PDG, FanInTrees, EST, RR) ->
     ReadyLs = lists:sort(fun({_,{A0,A1,A2}}, {_,{B0,B1,B2}}) ->
                                  infcmp({A0, A1, A2}, {B0, B1, B2})
                          end, maps:to_list(Ready)),
-    %% io:format("New round, ready:: ~p~n", [ReadyLs]),
+    ?regpressdbg("New round, ready:: ~p~n", [ReadyLs]),
     case ReadyLs of
         [] -> [];
         [{Next,{_,_,_}}|_] ->
-            %% io:format("!! ~p pushed on schedule~n", [Next]),
+            ?regpressdbg("!! ~p pushed on schedule~n", [Next]),
             Ready1 = pdg_add_ready_children(Next, J, maps:remove(Next, Ready),
                                             PDG, FanInTrees, EST, RR),
-            %% io:format("!! new ready ~p~n", [Ready1]),
+            ?regpressdbg("!! new ready ~p~n", [Ready1]),
             [Next|pdg_schedule(Ready1, J - 1, PDG, FanInTrees, EST, RR)]
     end.
 
@@ -2630,7 +2636,7 @@ pdg_add_ready_children(Parent, J, Ready, PDG, FanInTrees, EST, RR) ->
     Cs = digraph:in_neighbours(PDG, Parent),
     foldl(fun(C, Acc) ->
                   #{ C := E } = EST,
-                  %% io:format("!! ~p~n", [C]),
+                  ?regpressdbg("!! adding ready child ~p~n", [C]),
                   #{ C := R } = RR,
                   %% io:format("<< ~p := ~p~n", [C, R]),
                   Idx = case digraph:out_degree(FanInTrees, C) of
