@@ -2244,7 +2244,7 @@ ssa_opt_inter_block_sink1({#opt_st{ssa=Linear}=St, FuncDb}) ->
 
     %% Calculate new positions for the defining instructions. The new
     %% position is a block that dominates all uses of the variable.
-    DefLoc = new_def_locations(Used, Defs, Dom, Numbering, Unsuitable),
+    DefLoc = ibs_new_def_locations(Used, Defs, Dom, Numbering, Unsuitable),
 
     %% Now move all suitable defining instructions to their new blocks
     %% if the move is considered good.
@@ -2351,6 +2351,23 @@ block_defs_is([], _, Acc) ->
     Acc;
 block_defs_is([#b_set{dst=Var}=I|Is], L, Acc) ->
     block_defs_is(Is, L, Acc#{Var => {L, I}}).
+
+%% TODO: Switch to use new_def_locations/5
+ibs_new_def_locations([{V,UsedIn}|Vs], Defs, Dom, Numbering, Unsuitable) ->
+    DefIn = map_get(V, Defs),
+    Common = common_dominator(UsedIn, Dom, Numbering, Unsuitable),
+    case member(Common, map_get(DefIn, Dom)) of
+        true ->
+            %% The common dominator is either DefIn or an
+            %% ancestor of DefIn.
+            ibs_new_def_locations(Vs, Defs, Dom, Numbering, Unsuitable);
+        false ->
+            %% We have found a suitable descendant of DefIn,
+            %% to which the get_tuple_element instruction can
+            %% be sunk.
+            [{V,Common}|ibs_new_def_locations(Vs, Defs, Dom, Numbering, Unsuitable)]
+    end;
+ibs_new_def_locations([], _, _, _, _) -> [].
 
 %%%
 %%% When a tuple is matched, the pattern matching compiler generates a
