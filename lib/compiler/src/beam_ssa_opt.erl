@@ -2600,40 +2600,65 @@ pdg_schedule(PDG, FanInTrees, EST, RR) ->
     V = 'EXIT',
     #{ V := E } = EST,
     #{ V := R } = RR,
+
+    UseCounts = pdg_use_counts(PDG),
+    ?regpressdbg("Use counts: ~p~n", [UseCounts]),
+
     Ready = #{V => {inf,R,-E}},
     ?regpressdbg("Initial ready set: ~p~n", [Ready]),
-    pdg_schedule(Ready, digraph:no_vertices(PDG), PDG, FanInTrees, EST, RR).
+    pdg_schedule(Ready, digraph:no_vertices(PDG), PDG,
+                 FanInTrees, EST, RR, UseCounts).
 
-pdg_schedule(Ready, J, PDG, FanInTrees, EST, RR) ->
+pdg_schedule(Ready, J, PDG, FanInTrees, EST, RR, UseCounts) ->
     %% TODO: This has terrible performance
     ReadyLs = lists:sort(fun({_,{A0,A1,A2}}, {_,{B0,B1,B2}}) ->
                                  infcmp({A0, A1, A2}, {B0, B1, B2})
                          end, maps:to_list(Ready)),
-    ?regpressdbg("New round, ready:: ~p~n", [ReadyLs]),
+    ?regpressdbg("New round, ready: ~p~n  use counts: ~p~n",
+                 [ReadyLs, UseCounts]),
     case ReadyLs of
         [] -> [];
         [{Next,{_,_,_}}|_] ->
             ?regpressdbg("!! ~p pushed on schedule~n", [Next]),
-            Ready1 = pdg_add_ready_children(Next, J, maps:remove(Next, Ready),
-                                            PDG, FanInTrees, EST, RR),
+            {Ready1, UseCounts1} =
+                pdg_add_ready_children(Next, J, maps:remove(Next, Ready),
+                                       PDG, FanInTrees, EST, RR, UseCounts),
             ?regpressdbg("!! new ready ~p~n", [Ready1]),
-            [Next|pdg_schedule(Ready1, J - 1, PDG, FanInTrees, EST, RR)]
+            [Next|pdg_schedule(Ready1, J - 1, PDG, FanInTrees,
+                               EST, RR, UseCounts1)]
     end.
 
-pdg_add_ready_children(Parent, J, Ready, PDG, FanInTrees, EST, RR) ->
+%%% Create a dict mapping a variable to the number of users it has in
+%%% the DFG.
+pdg_use_counts(PDG) ->
+    foldl(fun(V, Counts) ->
+                  Counts#{ V => digraph:out_degree(PDG, V) }
+          end, #{}, digraph:vertices(PDG)).
+
+pdg_add_ready_children(Parent, J, Ready, PDG, FanInTrees,
+                       EST, RR, UseCounts0) ->
     Cs = digraph:in_neighbours(PDG, Parent),
-    foldl(fun(C, Acc) ->
-                  #{ C := E } = EST,
-                  ?regpressdbg("!! adding ready child ~p~n", [C]),
-                  #{ C := R } = RR,
-                  %% io:format("<< ~p := ~p~n", [C, R]),
-                  Idx = case digraph:out_degree(FanInTrees, C) of
-                            0 -> inf;
-                            _ -> J
-                        end,
-                  Acc#{ C => {Idx,R,-E} }
-          end,
-          Ready, Cs).
+
+    {UseCounts1, ReadyChildren} =
+        foldl(fun(C, {UseCounts, Acc}) ->
+                      case UseCounts of
+                          #{ C := 1 } -> {UseCounts#{ C := 0 },[C|Acc]};
+                          #{ C := N } -> {UseCounts#{ C := N - 1 },Acc}
+                      end
+              end, {UseCounts0, []}, Cs),
+
+    Ready1 = foldl(fun(C, Acc) ->
+                           #{ C := E } = EST,
+                           ?regpressdbg("!! adding ready child ~p~n", [C]),
+                           #{ C := R } = RR,
+                           Idx = case digraph:out_degree(FanInTrees, C) of
+                                     0 -> inf;
+                                     _ -> J
+                                 end,
+                           Acc#{ C => {Idx,R,-E} }
+                   end,
+                   Ready, ReadyChildren),
+    {Ready1, UseCounts1}.
 
 infcmp({A0,A1,A2}, {B0,B1,B2}) ->
     infcmp1([A0,A1,A2],[B0,B1,B2]).
