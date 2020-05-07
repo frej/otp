@@ -2597,21 +2597,6 @@ regpress_optimize_is(_L, Is, LastUses, {_LiveIn, LiveOut}) ->
 %%% 
 %%%
 pdg_schedule(PDG, FanInTrees, EST, RR) ->
-    %% Ready = foldl(fun(V, ReadyAcc) ->
-    %%                       #{ V := E } = EST,
-    %%                       #{ V := R } = RR,
-    %%                       case {digraph:out_degree(PDG, V),
-    %%                             digraph:out_degree(FanInTrees, V)} of
-    %%                           {0, 0} ->
-    %%                               [{V,inf,R,-E}|ReadyAcc];
-    %%                           {0, _} ->
-    %%                               [{V,0,R,-E}|ReadyAcc];
-    %%                           {_, 0} ->
-    %%                               [{V,inf,R,-E}|ReadyAcc];
-    %%                           _ ->
-    %%                               ReadyAcc
-    %%                       end
-    %%               end, [], digraph:vertices(PDG)),
     V = 'EXIT',
     #{ V := E } = EST,
     #{ V := R } = RR,
@@ -2650,17 +2635,6 @@ pdg_add_ready_children(Parent, J, Ready, PDG, FanInTrees, EST, RR) ->
           end,
           Ready, Cs).
 
-%% %% As min/2 but handles 'inf' as a value
-%% infmin(inf, B) ->
-%%     B;
-%% infmin(A, B) when A < B ->
-%%     A;
-%% infmin(_, B) ->
-%%     B.
-
-%% infmin(A, B, C) ->
-%%     infmin(infmin(A, B), C).
-
 infcmp({A0,A1,A2}, {B0,B1,B2}) ->
     infcmp1([A0,A1,A2],[B0,B1,B2]).
 
@@ -2670,11 +2644,6 @@ infcmp1([X|Xs], [X|Ys]) ->
     infcmp1(Xs, Ys);
 infcmp1([X|_], [Y|_]) ->
     X < Y.
-
-%% infcmp1(B, C0, B, C1) ->
-%%     C0 < C1;
-%% infcmp1(B0, _, B1, _) ->
-%%     B0 < B1.
 
 %%%
 %%% Calculate the earliest starting time (EST) for the PDG. Return the
