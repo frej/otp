@@ -4376,6 +4376,9 @@ new_var(Base, Count) when is_atom(Base) ->
 %%% Evaluate if moving the definition of `Def` from the block `From`
 %%% to the block `To` is good with regards to increased spilling.
 %%%
+%%% TODO: Make this less restrictive, we could allow the sink of an
+%%% x-clobberer if the live-set is smaller at the destination.
+%%%
 is_good_def_move(#b_set{dst=Var}=Def, From, To, BlockMap, Liveness) ->
     DefUses = beam_ssa:used(Def),
     #{ To := {LiveIns,_}, From := {_,LiveOuts} } = Liveness,
@@ -4397,14 +4400,15 @@ is_good_def_move(#b_set{dst=Var}=Def, From, To, BlockMap, Liveness) ->
             %% We increase the liveness set by one element, but on the
             %% other hand it won't contain Def, so sinking won't make
             %% anything worse.
-            true;
+            not beam_ssa:clobbers_xregs(Def);
         false ->
             %% We need to look at the blocks through which we will
             %% extend the liveness ranges for UseSet. If there are no
             %% x-clobbering instructions in the blocks, we know that
             %% this operation won't produce more spilling.
             Blocks = blocks_on_path(Var, From, To, BlockMap, Liveness),
-            not blocks_clobber_x(Blocks, BlockMap)
+            (not beam_ssa:clobbers_xregs(Def))
+                andalso not blocks_clobber_x(Blocks, BlockMap)
     end.
 
 %%% Return true if the block containing `Def`, has x-clobbering
