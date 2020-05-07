@@ -2620,7 +2620,6 @@ pdg_schedule(Ready, J, PDG, FanInTrees, EST, RR, UseCounts) ->
             {Ready1, UseCounts1} =
                 pdg_add_ready_children(Next, J, maps:remove(Next, Ready),
                                        PDG, FanInTrees, EST, RR, UseCounts),
-            ?regpressdbg("!! new ready ~p~n", [Ready1]),
             [Next|pdg_schedule(Ready1, J - 1, PDG, FanInTrees,
                                EST, RR, UseCounts1)]
     end.
@@ -2717,16 +2716,26 @@ regpress_calc_rr(Trees, PDG) ->
           #{}, Trees).
 
 regpress_calc_rr_rec(V, Requirements, PDG) ->
+    {V, Inst} = digraph:vertex(PDG, V),
+    %% Penalize instructions clobbering x-registers
+    Extra = case Inst of
+                I=#b_set{} ->
+                    case beam_ssa:clobbers_xregs(I) of
+                        true -> 10;
+                        false -> 0
+                    end;
+                _ -> 0
+            end,
     case digraph:in_neighbours(PDG, V) of
         [] ->
-            Requirements#{V => 0};
+            Requirements#{V => Extra};
         Neighbours ->
             Reqs = foldl(fun(N, Acc) -> regpress_calc_rr_rec(N, Acc, PDG) end,
                          Requirements, Neighbours),
             RRs = lists:sort([maps:get(N, Reqs) || N <- Neighbours]),
             K = length(RRs),
             Costs = [ X + K - I || {I,X} <- lists:zip(lists:seq(1, K), RRs)],
-            Reqs#{ V => lists:max(Costs) }
+            Reqs#{ V => Extra + lists:max(Costs) }
     end.
 
 %%%
