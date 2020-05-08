@@ -2195,8 +2195,11 @@ opt_ne_single_use(Var, Uses) when is_map(Uses) ->
 ssa_opt_inter_block_sink({St, FuncDb}) ->
     %% TODO: This could be optimized by only calculating the dominance
     %% tree once, and updating the Used and Defs sets as we move defs.
+    %% io:format("in>>~n~p~n", [Linear]),
     case ssa_opt_inter_block_sink1({St, FuncDb}) of
-        {St,FuncDb} -> {St,FuncDb}; % Nothing changed, we are done
+        {St,FuncDb} ->
+            %% io:format("out>>~n~p~n", [Linear1]),
+            {St,FuncDb}; % Nothing changed, we are done
         {St1,FuncDb} -> ssa_opt_inter_block_sink({St1,FuncDb})
     end.
 
@@ -2607,24 +2610,38 @@ pdg_schedule(PDG, FanInTrees, EST, RR) ->
     Ready = #{V => {inf,R,-E}},
     ?regpressdbg("Initial ready set: ~p~n", [Ready]),
     pdg_schedule(Ready, digraph:no_vertices(PDG), PDG,
-                 FanInTrees, EST, RR, UseCounts).
+                 FanInTrees, EST, RR, UseCounts, cerl_sets:new()).
 
-pdg_schedule(Ready, J, PDG, FanInTrees, EST, RR, UseCounts) ->
+pdg_schedule(Ready, J, PDG, FanInTrees, EST, RR, UseCounts, Live) ->
     %% TODO: This has terrible performance
-    ReadyLs = lists:sort(fun({_,{A0,A1,A2}}, {_,{B0,B1,B2}}) ->
-                                 infcmp({A0, A1, A2}, {B0, B1, B2})
-                         end, maps:to_list(Ready)),
-    ?regpressdbg("New round, ready: ~p~n  use counts: ~p~n",
-                 [ReadyLs, UseCounts]),
+    Unsorted = [{{Def,Info}, regpress_update_live(Def, PDG, Live)}
+                || {Def,Info} <- maps:to_list(Ready)],
+    ReadyLs = lists:sort(fun({{_,{A0,A1,A2}},C0}, {{_,{B0,B1,B2}},C1}) ->
+                                 infcmp([A0, A1, cerl_sets:size(C0), A2],
+                                        [B0, B1, cerl_sets:size(C1), B2])
+                         end, Unsorted),
+    ?regpressdbg("New round, ready: ~p~n  use counts: ~p~n  currently_live: ~p~n",
+                 [ReadyLs, UseCounts, cerl_sets:to_list(Live)]),
     case ReadyLs of
         [] -> [];
-        [{Next,{_,_,_}}|_] ->
+        [{{Next,{_,_,_}},Live1}|_] ->
             ?regpressdbg("!! ~p pushed on schedule~n", [Next]),
             {Ready1, UseCounts1} =
                 pdg_add_ready_children(Next, J, maps:remove(Next, Ready),
                                        PDG, FanInTrees, EST, RR, UseCounts),
             [Next|pdg_schedule(Ready1, J - 1, PDG, FanInTrees,
-                               EST, RR, UseCounts1)]
+                               EST, RR, UseCounts1, Live1)]
+    end.
+
+regpress_update_live(E='EXIT', PDG, Live) ->
+    {E,{E,Uses}} = digraph:vertex(PDG, E),
+    cerl_sets:union(Live, cerl_sets:from_list(Uses));
+regpress_update_live(V, PDG, Live) ->
+    case digraph:vertex(PDG, V) of
+        {V,I=#b_set{dst=Dst}} ->
+            Uses = cerl_sets:from_list(beam_ssa:used(I)),
+            cerl_sets:union(Uses, cerl_sets:del_element(Dst, Live));
+        {V,{'LIVE-IN',_}} -> Live
     end.
 
 %%% Create a dict mapping a variable to the number of users it has in
@@ -2659,20 +2676,18 @@ pdg_add_ready_children(Parent, J, Ready, PDG, FanInTrees,
                    Ready, ReadyChildren),
     {Ready1, UseCounts1}.
 
-infcmp({A0,A1,A2}, {B0,B1,B2}) ->
-    infcmp1([A0,A1,A2],[B0,B1,B2]).
-
-infcmp1([X], [Y]) ->
+infcmp([X], [Y]) ->
     X < Y;
-infcmp1([X|Xs], [X|Ys]) ->
-    infcmp1(Xs, Ys);
-infcmp1([X|_], [Y|_]) ->
+infcmp([X|Xs], [X|Ys]) ->
+    infcmp(Xs, Ys);
+infcmp([X|_], [Y|_]) ->
     X < Y.
 
 %%%
 %%% Calculate the earliest starting time (EST) for the PDG. Return the
 %%% results in a map, mapping a node to its EST.
 %%%
+
 regpress_calc_est(PDG) ->
     foldl(fun(V, EST) ->
                   {_,R} = regpress_calc_est_rec(V, EST, PDG),
