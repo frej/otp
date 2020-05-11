@@ -4401,7 +4401,6 @@ is_good_def_move(#b_set{dst=Var}=Def, From, To, BlockMap, Liveness) ->
     UseSet = cerl_sets:from_list(DefUses),
     DefHasFollowingClobbers = igdm_has_following_xclobbers(Def, Is),
     NetLiveOutDelta = cerl_sets:size(cerl_sets:subtract(UseSet, LiveOuts)),
-    NetLiveInDelta = cerl_sets:size(cerl_sets:subtract(UseSet, LiveIns)),
     case cerl_sets:is_subset(UseSet, LiveIns) of
         true ->
             %% Everything needed for the Def is already live at `To`,
@@ -4411,11 +4410,6 @@ is_good_def_move(#b_set{dst=Var}=Def, From, To, BlockMap, Liveness) ->
             %% Moving this def would increase the spill-set size at
             %% the clobbers in `From`, so don't do it.
             false;
-        false when NetLiveInDelta =:= 1 ->
-            %% We increase the liveness set by one element, but on the
-            %% other hand it won't contain Def, so sinking won't make
-            %% anything worse.
-            not beam_ssa:clobbers_xregs(Def);
         false ->
             %% We need to look at the blocks through which we will
             %% extend the liveness ranges for UseSet. If there are no
