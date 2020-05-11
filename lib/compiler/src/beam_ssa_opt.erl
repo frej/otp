@@ -4398,7 +4398,16 @@ is_good_def_move(#b_set{dst=Var}=Def, From, To, BlockMap, Liveness) ->
     UseSet = cerl_sets:from_list(DefUses),
     DefHasFollowingClobbers = igdm_has_following_xclobbers(Def, Is),
     NetLiveOutDelta = cerl_sets:size(cerl_sets:subtract(UseSet, LiveOuts)),
+    ClobbersX = beam_ssa:clobbers_xregs(Def),
+    LiveInSize = cerl_sets:size(LiveIns),
+    LiveOutSize = cerl_sets:size(LiveOuts),
+
     case cerl_sets:is_subset(UseSet, LiveIns) of
+        true when ClobbersX, LiveInSize > LiveOutSize ->
+            % If we were to move this x-clobberer we would have to
+            % spill more. The def itself is a member of both sets, so
+            % a simple comparison will suffice.
+            false;
         true ->
             %% Everything needed for the Def is already live at `To`,
             %% sinking won't make anything worse.
@@ -4413,8 +4422,7 @@ is_good_def_move(#b_set{dst=Var}=Def, From, To, BlockMap, Liveness) ->
             %% x-clobbering instructions in the blocks, we know that
             %% this operation won't produce more spilling.
             Blocks = blocks_on_path(Var, From, To, BlockMap, Liveness),
-            (not beam_ssa:clobbers_xregs(Def))
-                andalso not blocks_clobber_x(Blocks, BlockMap)
+            (not ClobbersX) andalso not blocks_clobber_x(Blocks, BlockMap)
     end.
 
 %%% Return true if the block containing `Def`, has x-clobbering
