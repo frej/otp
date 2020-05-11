@@ -2616,9 +2616,9 @@ pdg_schedule(Ready, J, PDG, FanInTrees, EST, RR, UseCounts, Live) ->
     %% TODO: This has terrible performance
     Unsorted = [{{Def,Info}, regpress_update_live(Def, PDG, Live)}
                 || {Def,Info} <- maps:to_list(Ready)],
-    ReadyLs = lists:sort(fun({{_,{A0,A1,A2}},C0}, {{_,{B0,B1,B2}},C1}) ->
-                                 infcmp([A0, A1, cerl_sets:size(C0), A2],
-                                        [B0, B1, cerl_sets:size(C1), B2])
+    ReadyLs = lists:sort(fun({{V0,{A0,A1,A2}},C0}, {{V1,{B0,B1,B2}},C1}) ->
+                                 infcmp([A0, A1, cerl_sets:size(C0), A2, V0],
+                                        [B0, B1, cerl_sets:size(C1), B2, V1])
                          end, Unsorted),
     ?regpressdbg("New round, ready: ~p~n  use counts: ~p~n  currently_live: ~p~n",
                  [ReadyLs, UseCounts, cerl_sets:to_list(Live)]),
