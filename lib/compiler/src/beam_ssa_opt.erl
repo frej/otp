@@ -2611,8 +2611,10 @@ pdg_schedule(PDG, FanInTrees, EST, RR) ->
 
 pdg_schedule(Ready, J, PDG, FanInTrees, EST, RR, UseCounts, Live) ->
     %% TODO: This has terrible performance
-    Unsorted = [{{Def,Info}, regpress_update_live(Def, PDG, Live)}
-                || {Def,Info} <- maps:to_list(Ready)],
+    Unsorted = [begin
+                    L = regpress_update_live(Def, PDG, Live),
+                    {{Def,pdg_clobber_cost(Def,Info,PDG,Live)},L}
+                end || {Def,Info} <- maps:to_list(Ready)],
     ReadyLs = lists:sort(fun({{V0,{A0,A1,A2}},C0}, {{V1,{B0,B1,B2}},C1}) ->
                                  infcmp([A0, A1, cerl_sets:size(C0), A2, V0],
                                         [B0, B1, cerl_sets:size(C1), B2, V1])
@@ -2628,6 +2630,20 @@ pdg_schedule(Ready, J, PDG, FanInTrees, EST, RR, UseCounts, Live) ->
                                        PDG, FanInTrees, EST, RR, UseCounts),
             [Next|pdg_schedule(Ready1, J - 1, PDG, FanInTrees,
                                EST, RR, UseCounts1, Live1)]
+    end.
+
+pdg_clobber_cost('EXIT', Info, _PDG, _Live) ->
+    Info;
+pdg_clobber_cost(Def, Info={Idx,RR,Est}, PDG, Live) ->
+    case digraph:vertex(PDG, Def) of
+        {Def,I=#b_set{dst=Dst}} ->
+            case beam_ssa:clobbers_xregs(I) of
+                false -> Info;
+                true ->
+                    ClobberSet = cerl_sets:del_element(Dst, Live),
+                    {Idx,RR+cerl_sets:size(ClobberSet),Est}
+            end;
+        {Def,{'LIVE-IN',_}} -> Info
     end.
 
 regpress_update_live(E='EXIT', PDG, Live) ->
@@ -2731,26 +2747,18 @@ regpress_calc_rr(Trees, PDG) ->
           #{}, Trees).
 
 regpress_calc_rr_rec(V, Requirements, PDG) ->
-    {V, Inst} = digraph:vertex(PDG, V),
+    {V, _Inst} = digraph:vertex(PDG, V),
     %% Penalize instructions clobbering x-registers
-    Extra = case Inst of
-                I=#b_set{} ->
-                    case beam_ssa:clobbers_xregs(I) of
-                        true -> 10;
-                        false -> 0
-                    end;
-                _ -> 0
-            end,
     case digraph:in_neighbours(PDG, V) of
         [] ->
-            Requirements#{V => Extra};
+            Requirements#{V => 0};
         Neighbours ->
             Reqs = foldl(fun(N, Acc) -> regpress_calc_rr_rec(N, Acc, PDG) end,
                          Requirements, Neighbours),
             RRs = lists:sort([maps:get(N, Reqs) || N <- Neighbours]),
             K = length(RRs),
             Costs = [ X + K - I || {I,X} <- lists:zip(lists:seq(1, K), RRs)],
-            Reqs#{ V => Extra + lists:max(Costs) }
+            Reqs#{ V => 0 + lists:max(Costs) }
     end.
 
 %%%
