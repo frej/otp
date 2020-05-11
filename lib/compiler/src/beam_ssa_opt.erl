@@ -2524,7 +2524,7 @@ regpress_optimize_block(_,
                         R=#b_blk{is=[#b_set{dst=X},
                                      #b_set{dst=Y,op={succeeded,_},args=[X]}],
                                  last=#b_br{bool=Y}}, _) ->
-    %% This is guard so leave it alone
+    %% This is a guard so leave it alone
     R;
 regpress_optimize_block(L, R=#b_blk{is=[I,_|_]=Is,last=Last}, Liveness) ->
     %% need at least two instructions and both of them to be
