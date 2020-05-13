@@ -2631,7 +2631,7 @@ pdg_schedule(Ready, J, PDG, FanInTrees, EST, RR, UseCounts, Live) ->
             ?regpressdbg("!! ~p pushed on schedule~n", [Next]),
             {Ready1, UseCounts1} =
                 pdg_add_ready_children(Next, J, maps:remove(Next, Ready),
-                                       PDG, FanInTrees, EST, RR, UseCounts),
+                                       PDG, EST, RR, UseCounts),
             [Next|pdg_schedule(Ready1, J - 1, PDG, FanInTrees,
                                EST, RR, UseCounts1, Live1)]
     end.
@@ -2668,8 +2668,7 @@ pdg_use_counts(PDG) ->
                   Counts#{ V => digraph:out_degree(PDG, V) }
           end, #{}, digraph:vertices(PDG)).
 
-pdg_add_ready_children(Parent, J, Ready, PDG, FanInTrees,
-                       EST, RR, UseCounts0) ->
+pdg_add_ready_children(Parent, J, Ready, PDG, EST, RR, UseCounts0) ->
     Cs = digraph:in_neighbours(PDG, Parent),
 
     {UseCounts1, ReadyChildren} =
@@ -2684,11 +2683,7 @@ pdg_add_ready_children(Parent, J, Ready, PDG, FanInTrees,
                            #{ C := E } = EST,
                            ?regpressdbg("!! adding ready child ~p~n", [C]),
                            #{ C := R } = RR,
-                           Idx = case digraph:out_degree(FanInTrees, C) of
-                                     0 -> inf;
-                                     _ -> J
-                                 end,
-                           Acc#{ C => {Idx,R,-E} }
+                           Acc#{ C => {J,R,-E} }
                    end,
                    Ready, ReadyChildren),
     {Ready1, UseCounts1}.
