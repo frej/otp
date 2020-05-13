@@ -2561,9 +2561,16 @@ regpress_optimize_is(_L, Is, LastUses, {_LiveIn, LiveOut}) ->
     ?regpressdbg_to_dot(TreeG,
                         "/tmp/dot/trees-" ++ integer_to_list(_L)++".dot"),
 
+    %% Enumerate all instructions
+    {IsIdx,_} = foldl(fun(#b_set{dst=Def}, {Map, Idx}) ->
+                              {Map#{Def => Idx}, Idx-1};
+                         (_, Acc) ->
+                              Acc
+                      end, {#{}, 0}, Is),
+
     EST = regpress_calc_est(PDG),
     ?regpressdbg("EST: ~p: ~p~n", [_L, EST]),
-    Schedule = pdg_schedule(PDG, TreeG, EST, RR),
+    Schedule = pdg_schedule(PDG, TreeG, EST, RR, IsIdx),
 
     Out = foldl(fun(V, Acc) ->
                         case digraph:vertex(PDG, V) of
@@ -2600,7 +2607,7 @@ regpress_optimize_is(_L, Is, LastUses, {_LiveIn, LiveOut}) ->
 %%%
 %%% 
 %%%
-pdg_schedule(PDG, FanInTrees, EST, RR) ->
+pdg_schedule(PDG, FanInTrees, EST, RR, IsIdx) ->
     V = 'EXIT',
     #{ V := E } = EST,
     #{ V := R } = RR,
@@ -2608,33 +2615,34 @@ pdg_schedule(PDG, FanInTrees, EST, RR) ->
     UseCounts = pdg_use_counts(PDG),
     ?regpressdbg("Use counts: ~p~n", [UseCounts]),
 
-    Ready = #{V => {inf,R,-E}},
+    Ready = #{V => {inf,R,-E,pdg_def_idx(V, IsIdx)}},
+
     ?regpressdbg("Initial ready set: ~p~n", [Ready]),
     pdg_schedule(Ready, digraph:no_vertices(PDG), PDG,
-                 FanInTrees, EST, RR, UseCounts, cerl_sets:new()).
+                 FanInTrees, EST, RR, UseCounts, cerl_sets:new(), IsIdx).
 
-pdg_schedule(Ready, J, PDG, FanInTrees, EST, RR, UseCounts, Live) ->
+pdg_schedule(Ready, J, PDG, FanInTrees, EST, RR, UseCounts, Live, IsIdx) ->
     %% TODO: This has terrible performance
     Unsorted = [begin
                     L = regpress_update_live(Def, PDG, Live),
                     {Def,Info,pdg_clobber_cost(Def,PDG,Live),L}
                 end || {Def,Info} <- maps:to_list(Ready)],
     ReadyLs =
-        lists:sort(fun({V0,{A0,A1,A2},D0,C0}, {V1,{B0,B1,B2},D1,C1}) ->
-                           infcmp([A0, A1, D0, cerl_sets:size(C0), A2, V0],
-                                  [B0, B1, D1, cerl_sets:size(C1), B2, V1])
+        lists:sort(fun({_V0,{A0,A1,A2,I0},D0,C0}, {_V1,{B0,B1,B2,I1},D1,C1}) ->
+                           infcmp([A0, A1, D0, cerl_sets:size(C0), A2, I0],
+                                  [B0, B1, D1, cerl_sets:size(C1), B2, I1])
                    end, Unsorted),
     ?regpressdbg("New round, ready: ~p~n  use counts: ~p~n  currently_live: ~p~n",
                  [ReadyLs, UseCounts, cerl_sets:to_list(Live)]),
     case ReadyLs of
         [] -> [];
-        [{Next,{_,_,_},_,Live1}|_] ->
+        [{Next,{_,_,_,_},_,Live1}|_] ->
             ?regpressdbg("!! ~p pushed on schedule~n", [Next]),
             {Ready1, UseCounts1} =
                 pdg_add_ready_children(Next, J, maps:remove(Next, Ready),
-                                       PDG, EST, RR, UseCounts),
+                                       PDG, EST, RR, UseCounts, IsIdx),
             [Next|pdg_schedule(Ready1, J - 1, PDG, FanInTrees,
-                               EST, RR, UseCounts1, Live1)]
+                               EST, RR, UseCounts1, Live1, IsIdx)]
     end.
 
 pdg_clobber_cost('EXIT', _PDG, _Live) ->
@@ -2669,7 +2677,16 @@ pdg_use_counts(PDG) ->
                   Counts#{ V => digraph:out_degree(PDG, V) }
           end, #{}, digraph:vertices(PDG)).
 
-pdg_add_ready_children(Parent, J, Ready, PDG, EST, RR, UseCounts0) ->
+%%%
+%%% Lookup the index of a def
+%%%
+pdg_def_idx(Def, IsIdx) ->
+    case IsIdx of
+        #{ Def := Idx } -> Idx;
+        _ -> 0
+    end.
+
+pdg_add_ready_children(Parent, J, Ready, PDG, EST, RR, UseCounts0, IsIdx) ->
     Cs = digraph:in_neighbours(PDG, Parent),
 
     {UseCounts1, ReadyChildren} =
@@ -2684,7 +2701,7 @@ pdg_add_ready_children(Parent, J, Ready, PDG, EST, RR, UseCounts0) ->
                            #{ C := E } = EST,
                            ?regpressdbg("!! adding ready child ~p~n", [C]),
                            #{ C := R } = RR,
-                           Acc#{ C => {J,R,-E} }
+                           Acc#{ C => {J,R,-E,pdg_def_idx(C, IsIdx)} }
                    end,
                    Ready, ReadyChildren),
     {Ready1, UseCounts1}.
