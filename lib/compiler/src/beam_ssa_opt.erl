@@ -2613,17 +2613,18 @@ pdg_schedule(Ready, J, PDG, FanInTrees, EST, RR, UseCounts, Live) ->
     %% TODO: This has terrible performance
     Unsorted = [begin
                     L = regpress_update_live(Def, PDG, Live),
-                    {{Def,pdg_clobber_cost(Def,Info,PDG,Live)},L}
+                    {Def,Info,pdg_clobber_cost(Def,PDG,Live),L}
                 end || {Def,Info} <- maps:to_list(Ready)],
-    ReadyLs = lists:sort(fun({{V0,{A0,A1,A2}},C0}, {{V1,{B0,B1,B2}},C1}) ->
-                                 infcmp([A0, A1, cerl_sets:size(C0), A2, V0],
-                                        [B0, B1, cerl_sets:size(C1), B2, V1])
-                         end, Unsorted),
+    ReadyLs =
+        lists:sort(fun({V0,{A0,A1,A2},D0,C0}, {V1,{B0,B1,B2},D1,C1}) ->
+                           infcmp([A0, A1, D0, cerl_sets:size(C0), A2, V0],
+                                  [B0, B1, D1, cerl_sets:size(C1), B2, V1])
+                   end, Unsorted),
     ?regpressdbg("New round, ready: ~p~n  use counts: ~p~n  currently_live: ~p~n",
                  [ReadyLs, UseCounts, cerl_sets:to_list(Live)]),
     case ReadyLs of
         [] -> [];
-        [{{Next,{_,_,_}},Live1}|_] ->
+        [{Next,{_,_,_},_,Live1}|_] ->
             ?regpressdbg("!! ~p pushed on schedule~n", [Next]),
             {Ready1, UseCounts1} =
                 pdg_add_ready_children(Next, J, maps:remove(Next, Ready),
@@ -2632,18 +2633,18 @@ pdg_schedule(Ready, J, PDG, FanInTrees, EST, RR, UseCounts, Live) ->
                                EST, RR, UseCounts1, Live1)]
     end.
 
-pdg_clobber_cost('EXIT', Info, _PDG, _Live) ->
-    Info;
-pdg_clobber_cost(Def, Info={Idx,RR,Est}, PDG, Live) ->
+pdg_clobber_cost('EXIT', _PDG, _Live) ->
+    0;
+pdg_clobber_cost(Def, PDG, Live) ->
     case digraph:vertex(PDG, Def) of
         {Def,I=#b_set{dst=Dst}} ->
             case beam_ssa:clobbers_xregs(I) of
-                false -> Info;
+                false -> 0;
                 true ->
                     ClobberSet = cerl_sets:del_element(Dst, Live),
-                    {Idx,RR+cerl_sets:size(ClobberSet),Est}
+                    cerl_sets:size(ClobberSet)
             end;
-        {Def,{'LIVE-IN',_}} -> Info
+        {Def,{'LIVE-IN',_}} -> 0
     end.
 
 regpress_update_live(E='EXIT', PDG, Live) ->
