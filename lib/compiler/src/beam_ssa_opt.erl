@@ -304,9 +304,9 @@ epilogue_passes(Opts) ->
           ?PASS(ssa_opt_bsm),
           ?PASS(ssa_opt_bsm_shortcut),
           ?PASS(ssa_opt_sink),
-          ?PASS(ssa_opt_regpress),
           ?PASS(ssa_opt_blockify),
           ?PASS(ssa_opt_merge_blocks),
+          ?PASS(ssa_opt_regpress),
           ?PASS(ssa_opt_get_tuple_element),
           ?PASS(ssa_opt_tail_calls),
           ?PASS(ssa_opt_trim_unreachable),
@@ -2505,15 +2505,16 @@ used_blocks([], _Def, Acc) ->
 
 
 -spec ssa_opt_regpress(any()) -> any().
-ssa_opt_regpress({#opt_st{ssa=Linear,cnt=Counter}=St, FuncDb}) ->
+ssa_opt_regpress({#opt_st{ssa=Blocks,cnt=Counter}=St, FuncDb}) ->
+    Linear = beam_ssa:linearize(Blocks),
     {Split0,Counter1} = regpress_split(Linear, Counter),
     Liveness = liveness(beam_ssa:linearize(Split0)),
     Split = regpress_optimize_blocks(Split0, Liveness),
-    %% io:format("linear:~n~p~n", [Linear]),
-    %% io:format("split:~n~p~n", [Split]),
+    ?regpressdbg("linear:~n~p~n", [Linear]),
+    ?regpressdbg("split:~n~p~n", [Split]),
     Merged = regpress_merge(Split, Counter),
     %% io:format("merged:~n~p~n", [Merged]),
-    {St#opt_st{ssa=Merged,cnt=Counter1},FuncDb}.
+    {St#opt_st{ssa=maps:from_list(Merged),cnt=Counter1},FuncDb}.
 
 regpress_optimize_blocks(Split, Liveness) ->
     maps:map(fun(L, Region) ->
