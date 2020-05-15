@@ -19,10 +19,11 @@ main(Args0) ->
     io:format("~p~n", [Columns]),
     foreach(fun(Col) ->
                     Sorted = sort_by_column(NonZero, Col),
+                    Hist = histogram(NonZero, Col),
                     Filename =
                         filename:join(OutDir, atom_to_list(Col) ++ ".html"),
                     ok = filelib:ensure_dir(Filename),
-                    to_html(Columns, Filename, Sorted)
+                    to_html(Columns, Filename, Sorted, Hist)
             end, Columns),
     ok.
 
@@ -35,8 +36,10 @@ sort_by_column(Rows, Col) ->
          end,
          Rows).
 
-to_html(Columns, Filename, Rows) ->
-    Out = ["<html><table style=\"width:100%\">\n",
+to_html(Columns, Filename, Rows, Hist) ->
+    Out = ["<html>\n",
+           format_histogram(Hist),
+           "<table style=\"width:100%\">\n",
            %% The header
            "<tr><th>fun</th>",
            [["<th style=\"text-align:right\">", atom_to_list(C), "</th>"]
@@ -86,3 +89,47 @@ read_qfiles(Dir) ->
           end,
           #{},
           filelib:wildcard(filename:join(Dir, "*.Q"))).
+
+histogram(Rows, Col) ->
+    H = foldl(fun({_Fun, Values}, Hist) ->
+                      N = maps:get(Col, Values),
+                      Old = maps:get(N, Hist, 0),
+                      Hist#{N => Old + 1}
+              end, #{}, Rows),
+    {Col,sort(maps:to_list(H))}.
+
+pc(Part, Total) ->
+    io_lib:format("~.1f", [100.0*Part/Total]).
+
+format_histogram({Key, Ls}) ->
+    {Total,Improved,NoChange,Worse} = foldl(fun({Delta,N}, {T,I,NC,W}) ->
+                                                    S = T + N,
+                                                    if Delta == 0 ->
+                                                            {S,I,NC + N,W};
+                                                       Delta < 0 ->
+                                                            {S,I + N,NC,W};
+                                                       Delta > 0 ->
+                                                            {S,I,NC,W + N}
+                                                    end
+                                            end, {0,0,0,0}, Ls),
+    ["<table>\n",
+     "<tr><th>Classification</th><th>Count</th><th>%</th></tr>\n",
+     "<tr><td>Better</td><td style=\"text-align:right\">",
+     integer_to_list(Improved), "</td><td style=\"text-align:right\">",
+     pc(Improved,Total), "</td></tr>\n",
+     "<tr><td>N/C</td><td style=\"text-align:right\">",
+     integer_to_list(NoChange), "</td><td style=\"text-align:right\">",
+     pc(NoChange,Total), "</td></tr>\n",
+     "<tr><td>Worse</td><td style=\"text-align:right\">",
+     integer_to_list(Worse), "</td><td style=\"text-align:right\">",
+     pc(Worse,Total), "</td></tr>\n",
+     "</table>\n",
+
+     "<table>\n",
+     "<tr><th>", atom_to_list(Key), " change</th>",
+     "<th>function count</th><th>%</th>",
+     [["<tr><td style=\"text-align:right\">", integer_to_list(Delta), "</td>",
+       "<td style=\"text-align:right\">", integer_to_list(Count), "</td>",
+       "<td style=\"text-align:right\">", pc(Count, Total), "</td>",
+       "</tr>"] || {Delta,Count} <- Ls],
+     "</table>\n"].
