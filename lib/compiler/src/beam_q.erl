@@ -30,7 +30,7 @@
 -spec module(beam_utils:module_code(), file:io_device()) -> 'ok'.
 
 module({Mod,_Exp,_Attr,Fs,_Lc}, IO) ->
-    Q = fold_funs(Mod, Fs, #{}),
+    Q = fold_funs(Mod, Fs, []),
     io:format(IO, "~p.\n", [Q]),
     ok.
 
@@ -46,7 +46,7 @@ fold_funs(Mod, [{function,F,A,_,Is}|Fs], Q) ->
              y_kill => 0,
              yy_moves => 0
             },
-    fold_funs(Mod, Fs, Q#{ {Mod,F,A} => fold_is(Is, Init) });
+    fold_funs(Mod, Fs, [{{Mod,F,A}, fold_is(Is, Init)}|Q]);
 fold_funs(_, [], Q) ->
     Q.
 
