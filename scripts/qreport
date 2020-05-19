@@ -85,7 +85,7 @@ any_value_nonzero1(_) ->
 read_qfiles(Dir) ->
     foldl(fun(F, Data) ->
                   {ok,[D]} = file:consult(F),
-                  maps:merge(D, Data)
+                  maps:merge(maps:from_list(D), Data)
           end,
           #{},
           filelib:wildcard(filename:join(Dir, "*.Q"))).
