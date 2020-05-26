@@ -2824,7 +2824,7 @@ regpress_add_pdg_use_edges(I=#b_set{dst=Dst}, G) ->
 
 regpress_add_pdg_use_edge(G, From, To) ->
     case {digraph:vertex(G, From), digraph:vertex(G, To)} of
-        {{FV,_},{TV,_}} -> digraph:add_edge(G, FV, TV);
+        {{FV,_},{TV,_}} -> digraph:add_edge(G, FV, TV, true);
         _ -> false
     end.
 
@@ -2833,7 +2833,7 @@ regpress_add_pdg_lastuse_edge(G, From, To) ->
         {{FV,_},{TV,_}} ->
             case digraph:get_path(G, FV, TV) of
                 false ->
-                    digraph:add_edge(G, FV, TV);
+                    digraph:add_edge(G, FV, TV, true);
                 _ ->
                     %% Redundant, exit already depends on this value
                     false
@@ -2849,7 +2849,7 @@ regpress_clone_pdg(G) ->
             end, digraph:vertices(G)),
     foreach(fun(E) ->
                     {E,V1,V2,Lbl} = digraph:edge(G, E),
-                    digraph:add_edge(N, V1, V2, Lbl)
+                    digraph:add_edge(N, E, V1, V2, Lbl)
             end, digraph:edges(G)),
     N.
 
@@ -2996,9 +2996,13 @@ pdg_to_dot_v(V, VtoI, G) ->
     io_lib:format("node~p [shape=box label=\"~w\"]~n", [I, Label]).
 
 pdg_to_dot_e(E, VtoI, G) ->
-    {E, V1, V2, _Label} = digraph:edge(G, E),
+    {E, V1, V2, Kind} = digraph:edge(G, E),
     #{ V1 := I1, V2 := I2 } = VtoI,
-    io_lib:format("node~p -> node~p~n", [I1, I2]).
+    Style = case Kind of
+                true -> "[style=solid]";
+                false -> "[style=dashed]"
+            end,
+    io_lib:format("node~p -> node~p ~s~n", [I1, I2, Style]).
 
 %% Partition sinks for get_tuple_element instructions in the same
 %% clause extracting from the same tuple. Sort each partition in
