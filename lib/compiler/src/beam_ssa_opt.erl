@@ -2506,46 +2506,155 @@ used_blocks([], _Def, Acc) ->
 
 -spec ssa_opt_regpress(any()) -> any().
 ssa_opt_regpress({#opt_st{ssa=Blocks,cnt=Counter}=St, FuncDb}) ->
-    Linear = beam_ssa:linearize(Blocks),
-    {Split0,Counter1} = regpress_split(Linear, Counter),
+    {{Split0,Counter1},ToOpt} = regpress_split(Blocks, Counter),
     Liveness = liveness(beam_ssa:linearize(Split0)),
-    Split = regpress_optimize_blocks(Split0, Liveness),
-    ?regpressdbg("linear:~n~p~n", [Linear]),
-    ?regpressdbg("split:~n~p~n", [Split]),
+    Split = regpress_optimize_blocks(Split0, Liveness, ToOpt),
+    ?regpressdbg("linear:~n~p~n", [beam_ssa:linearize(Blocks)]),
+    ?regpressdbg("to-opt:~n~p~n", [ToOpt]),
     Merged = regpress_merge(Split, Counter),
-    %% io:format("merged:~n~p~n", [Merged]),
+    ?regpressdbg("merged:~n~p~n", [Merged]),
     {St#opt_st{ssa=maps:from_list(Merged),cnt=Counter1},FuncDb}.
 
-regpress_optimize_blocks(Split, Liveness) ->
-    maps:map(fun(L, Region) ->
-                     regpress_optimize_block(L, Region, Liveness)
+-type rpr_splitmode() :: 'entry' | 'phi' | 'landingpad'
+                       | 'message' | 'to_opt' | 'split_needed'.
+-record(rpr_splitstate,
+        {
+         blocks = #{} :: #{beam_ssa:label():=rpr_splitmode()},
+         to_opt = [] :: [beam_ssa:b_set()], % instructions starting a basic
+                                            % block which should be scheduled.
+         to_split = [] :: [beam_ssa:b_set()] % instructions which should start
+                                             % their own basic block after
+                                             % splitting.
+        }).
+
+%%%
+%%% Calculate where basic blocks should be split before instruction
+%%% scheduling, return a #rpr_splitstate{} with information about
+%%% which instructions are split points and which instructions start a
+%%% basic block which should be scheduled.
+%%%
+rpr_split_points(Blocks) ->
+    F = fun(Lbl, Block=#b_blk{is=Is,last=T}, St0=#rpr_splitstate{blocks=Bs0}) ->
+                #{ Lbl := Mode } = Bs0,
+                {Mode1, St1} = rpr_block_splitpoints(Mode, Is, T, St0),
+                foldl(fun(Succ, St=#rpr_splitstate{blocks=Bs}) ->
+                              Bs1 = Bs#{Succ => Mode1},
+                              St#rpr_splitstate{blocks=Bs1} end,
+                      St1, beam_ssa:successors(Block))
+        end,
+    St = #rpr_splitstate{blocks=#{ 0 => entry }},
+    beam_ssa:fold_rpo(F, St, Blocks).
+
+rpr_block_splitpoints(entry, [#b_set{op=phi}|Is], T, St) ->
+    rpr_block_splitpoints(phi, Is, T, St);
+rpr_block_splitpoints(entry, [#b_set{op=landingpad}|Is], T, St) ->
+    rpr_block_splitpoints(landingpad, Is, T, St);
+rpr_block_splitpoints(entry, [#b_set{op=peek_message}|Is], T, St) ->
+    rpr_block_splitpoints(message, Is, T, St);
+%% Keep bitstring instructions anchored at the beginning of a block,
+%% this is to avoid breaking bs_match fusion.
+rpr_block_splitpoints(entry, [#b_set{op=bs_extract}|Is], T, St) ->
+    rpr_block_splitpoints(split_needed, Is, T, St);
+rpr_block_splitpoints(entry, [#b_set{op=bs_test_tail}|Is], T, St) ->
+    rpr_block_splitpoints(split_needed, Is, T, St);
+%% General fallback
+rpr_block_splitpoints(entry, [I|Is], T, St) ->
+    rpr_block_splitpoints(to_opt, Is, T, rpr_add_opt(I, St));
+rpr_block_splitpoints(entry, [], _, St) ->
+    {entry,St};
+%% While scanning through a sequence of Phis
+rpr_block_splitpoints(phi, [#b_set{op=phi}|Is], T, St) ->
+    rpr_block_splitpoints(phi, Is, T, St);
+rpr_block_splitpoints(phi, [#b_set{op=landingpad}|Is], T, St) ->
+    rpr_block_splitpoints(landingpad, Is, T, St);
+rpr_block_splitpoints(phi, [#b_set{op=peek_message}|Is], T, St) ->
+    rpr_block_splitpoints(message, Is, T, St);
+rpr_block_splitpoints(phi, Is, T, St) ->
+    rpr_block_splitpoints(split_needed, Is, T, St);
+rpr_block_splitpoints(phi, [], _, St) ->
+    {entry,St};
+%% Looking for a kill_try_tag
+rpr_block_splitpoints(landingpad, [#b_set{op=kill_try_tag}|Is], T, St) ->
+    rpr_block_splitpoints(split_needed, Is, T, St);
+rpr_block_splitpoints(landingpad, [_|Is], T, St) ->
+    rpr_block_splitpoints(landingpad, Is, T, St);
+rpr_block_splitpoints(landingpad, [], _T, St) ->
+    {landingpad,St};
+%% Looking for a remove_message
+rpr_block_splitpoints(message, [#b_set{op=remove_message}|Is], T, St) ->
+    rpr_block_splitpoints(split_needed, Is, T, St);
+rpr_block_splitpoints(message, [_|Is], T, St) ->
+    rpr_block_splitpoints(message, Is, T, St);
+rpr_block_splitpoints(message, [], _T, St) ->
+    {message,St};
+
+%% Don't touch guards, succeed constructs and switches
+rpr_block_splitpoints(split_needed,
+                      [#b_set{dst=X},#b_set{dst=Y,op={succeeded,_},args=[X]}],
+                      #b_br{bool=Y}, St) ->
+    {entry,St};
+rpr_block_splitpoints(split_needed, [#b_set{dst=D}], #b_br{bool=D}, St) ->
+    {entry,St};
+rpr_block_splitpoints(split_needed, [#b_set{dst=D}], #b_switch{arg=D}, St) ->
+    {entry,St};
+
+rpr_block_splitpoints(to_opt,
+                      [I=#b_set{dst=X},#b_set{dst=Y,op={succeeded,_},args=[X]}],
+                      #b_br{bool=Y}, St) ->
+    {entry,rpr_add_split(I, St)};
+rpr_block_splitpoints(to_opt, [I=#b_set{dst=D}], #b_br{bool=D}, St) ->
+    {entry,rpr_add_split(I, St)};
+rpr_block_splitpoints(to_opt, [I=#b_set{dst=D}], #b_switch{arg=D}, St) ->
+    {entry,rpr_add_split(I, St)};
+
+%% If we find anything that could be optimized, insert a split
+rpr_block_splitpoints(split_needed, [#b_set{op=peek_message}|Is], T, St) ->
+    rpr_block_splitpoints(message, Is, T, St);
+rpr_block_splitpoints(split_needed, [I|Is], T, St) ->
+    rpr_block_splitpoints(to_opt, Is, T, rpr_add_opt_and_split(I, St));
+rpr_block_splitpoints(split_needed, [], _T, St) ->
+    {entry,St};
+%% We are collecting a segment which could be reoredered
+rpr_block_splitpoints(to_opt, [], _T, St) ->
+    {entry,St};
+rpr_block_splitpoints(to_opt, [I=#b_set{op=landingpad}|Is], T, St) ->
+    rpr_block_splitpoints(landingpad, Is, T, rpr_add_split(I, St));
+rpr_block_splitpoints(to_opt, [I=#b_set{op=peek_message}|Is], T, St) ->
+    rpr_block_splitpoints(message, Is, T, rpr_add_split(I, St));
+rpr_block_splitpoints(to_opt, [_|Is], T, St) ->
+    rpr_block_splitpoints(to_opt, Is, T, St).
+
+rpr_add_split(I, St=#rpr_splitstate{to_split=Splits}) ->
+    St#rpr_splitstate{to_split=[I|Splits]}.
+
+rpr_add_opt(I, St=#rpr_splitstate{to_opt=Opts}) ->
+    St#rpr_splitstate{to_opt=[I|Opts]}.
+
+rpr_add_opt_and_split(I, St) ->
+    rpr_add_split(I, rpr_add_opt(I, St)).
+
+regpress_optimize_blocks(Split, Liveness, ToOpt) ->
+    OptSet = cerl_sets:from_list(ToOpt),
+    maps:map(fun(_L, Region=#b_blk{is=[]}) ->
+                     Region;
+                (_L, Region=#b_blk{is=[_]}) ->
+                        Region;
+                (L, Region=#b_blk{is=[First|_]}) ->
+                     case cerl_sets:is_element(First, OptSet) of
+                         true ->
+                             regpress_optimize_block(L, Region, Liveness);
+                         false ->
+                             Region
+                     end
              end, Split).
 
-regpress_optimize_block(_,
-                        R=#b_blk{is=[#b_set{dst=X},
-                                     #b_set{dst=Y,op={succeeded,_},args=[X]}],
-                                 last=#b_br{bool=Y}}, _) ->
-    %% This is a guard so leave it alone
-    R;
-regpress_optimize_block(L, R=#b_blk{is=[I,_|_]=Is,last=Last}, Liveness) ->
-    %% need at least two instructions and both of them to be
-    %% side-effect free. Due to our splitting logic, it is sufficent
-    %% to check the first instruction as, if it is side-effect free
-    %% all instructions in this block will be.
-    case regpress_classify_i(I) of
-        no_side_effect ->
-            #{ L:= Live } = Liveness,
-            R#b_blk{is=regpress_optimize_is(L, Is, beam_ssa:used(Last), Live)};
-        _ -> R
-    end;
-regpress_optimize_block(_, R, _) ->
-    R.
+regpress_optimize_block(L, R=#b_blk{is=Is,last=Last}, Liveness) ->
+    #{ L:= Live } = Liveness,
+    R#b_blk{is=regpress_optimize_is(L, Is, beam_ssa:used(Last), Live)}.
 
 regpress_optimize_is(_L, Is, LastUses, {_LiveIn, LiveOut}) ->
     ?regpressdbg("Block: ~p~n", [_L]),
-    %% io:format("live-in:~n~p~n", [_LiveIn]),
-    %% io:format("live-out:~n~p~n", [LiveOut]),
-    %% io:format("in:~n~p~n", [Is]),
+    ?regpressdbg("in:~n~p~n", [Is]),
 
     PDG = regpress_build_pdg(Is, LastUses, _LiveIn, LiveOut),
     ?regpressdbg_to_dot(PDG, "/tmp/dot/pdg-" ++ integer_to_list(_L)++".dot"),
@@ -2564,6 +2673,11 @@ regpress_optimize_is(_L, Is, LastUses, {_LiveIn, LiveOut}) ->
                          (_, Acc) ->
                               Acc
                       end, {#{}, 0}, Is),
+
+    RequiredFCDeps = lists:filter(fun rpr_need_fc_dep_i/1, Is),
+    rpr_add_fc_edges(PDG, RequiredFCDeps),
+
+    ?regpressdbg_to_dot(PDG, "/tmp/dot/fc-pdg-" ++ integer_to_list(_L)++".dot"),
 
     EST = regpress_calc_est(PDG),
     ?regpressdbg("EST: ~p: ~p~n", [_L, EST]),
@@ -2587,22 +2701,50 @@ regpress_optimize_is(_L, Is, LastUses, {_LiveIn, LiveOut}) ->
     end,
 
     X = length(Out),
-
-    %% case Out of
-    %%     Is -> ok;
-    %%     _ -> io:format("=== Schedule ~p ===~n in: ~p~n", [_L, Is]),
-    %%          io:format("  out: ~p~n", [Out]),
-    %%          io:format("  live-in:~n  ~p~n", [_LiveIn]),
-    %%          io:format("  live-out:~n  ~p~n", [LiveOut])
-    %% end,
-
     digraph:delete(PDG),
     digraph:delete(TreeG),
     Out.
 
+%%% Ensure that all instructions in Is have a def->use path between
+%%% them. Also make sure that the last instruction in Is has a path to
+%%% the 'EXIT' vertex.
+rpr_add_fc_edges(_PDG, []) ->
+    ok;
+rpr_add_fc_edges(PDG, [#b_set{dst=I}]) ->
+    rpr_add_fc_edges(PDG, I, []);
+rpr_add_fc_edges(PDG, [#b_set{dst=I}|Is]) ->
+    rpr_add_fc_edges(PDG, I, Is).
+
+rpr_add_fc_edges(PDG, Last, []) ->
+    rpr_ensure_fc_edge(PDG, Last, 'EXIT');
+rpr_add_fc_edges(PDG, Last, [#b_set{dst=I}|Is]) ->
+    rpr_ensure_fc_edge(PDG, Last, I),
+    rpr_add_fc_edges(PDG, I, Is).
+
+rpr_ensure_fc_edge(PDG, From, To) ->
+    case digraph:get_path(PDG, From, To) of
+        false ->
+            digraph:add_edge(PDG, From, To, false);
+        _ ->
+            ok
+    end.
+
+
+-ifdef(REGPRESSDEBUG).
+rpr_sched_dump([])->
+    ok;
+rpr_sched_dump([{Var,{PIdx,RR,Est,Idx},Clobber,Live}|Rest])->
+    io:format("~p: pidx=~p, rr=~p, clobber=~p, live=~p est=~p idx=~p~n",
+              [Var, PIdx, RR, Clobber, cerl_sets:to_list(Live), Est, Idx]),
+    rpr_sched_dump(Rest).
+-else.
+rpr_sched_dump(__Arg) -> ok.
+-endif.
 
 %%%
-%%% 
+%%% Schedule the instructions in a basic block using a modified
+%%% version of "Register-Sensitive Selection, Duplication, and
+%%% Sequencing of Instructions" by Sarkar, Serrano, and Simons.
 %%%
 pdg_schedule(PDG, FanInTrees, EST, RR, IsIdx) ->
     V = 'EXIT',
@@ -2629,8 +2771,9 @@ pdg_schedule(Ready, J, PDG, FanInTrees, EST, RR, UseCounts, Live, IsIdx) ->
                            infcmp([A0, A1, D0, cerl_sets:size(C0), A2, I0],
                                   [B0, B1, D1, cerl_sets:size(C1), B2, I1])
                    end, Unsorted),
-    ?regpressdbg("New round, ready: ~p~n  use counts: ~p~n  currently_live: ~p~n",
-                 [ReadyLs, UseCounts, cerl_sets:to_list(Live)]),
+    ?regpressdbg("New round, currently_live: ~p~n", [cerl_sets:to_list(Live)]),
+    rpr_sched_dump(ReadyLs),
+
     case ReadyLs of
         [] -> [];
         [{Next,{_,_,_,_},_,Live1}|_] ->
@@ -2642,6 +2785,10 @@ pdg_schedule(Ready, J, PDG, FanInTrees, EST, RR, UseCounts, Live, IsIdx) ->
                                EST, RR, UseCounts1, Live1, IsIdx)]
     end.
 
+%%%
+%%% Return the net number of registers which have to be spilled for
+%%% this instruction.
+%%%
 pdg_clobber_cost('EXIT', _PDG, _Live) ->
     0;
 pdg_clobber_cost(Def, PDG, Live) ->
@@ -2696,7 +2843,6 @@ pdg_add_ready_children(Parent, J, Ready, PDG, EST, RR, UseCounts0, IsIdx) ->
 
     Ready1 = foldl(fun(C, Acc) ->
                            #{ C := E } = EST,
-                           ?regpressdbg("!! adding ready child ~p~n", [C]),
                            #{ C := R } = RR,
                            Acc#{ C => {J,R,-E,pdg_def_idx(C, IsIdx)} }
                    end,
@@ -2851,93 +2997,48 @@ regpress_clone_pdg(G) ->
     N.
 
 %%%
-%%% Make sure that all instructions having side effects are in their
-%%% own basic blocks.
+%%% Split the basic blocks so that each instruction sequence which we
+%%% can reschedule to potentially decrese the register pressure is in
+%%% its own basic block.
 %%%
 regpress_split(Blocks, Count) ->
-    SplitPoints = regpress_split_points(Blocks),
-    F = fun(I) -> maps:is_key(I, SplitPoints) end,
-    beam_ssa:split_blocks(F, maps:from_list(Blocks), Count).
+    #rpr_splitstate{to_split=SplitPoints,to_opt=TO} =
+        rpr_split_points(Blocks),
+    SplitPointsSet = cerl_sets:from_list(SplitPoints),
+    F = fun(I) -> cerl_sets:is_element(I, SplitPointsSet) end,
+    {beam_ssa:split_blocks(F, Blocks, Count),TO}.
 
 %%%
-%%% Build a set of where to split the blocks. We split to get unbroken
-%%% sequences of phis, side-effect free instructions and instructions
-%%% with side effects.
+%%% Return true if the instruction requires a forced flow-control
+%%% dependency. This is true for all instructions having side effects
+%%% as well as instructions which update a hidden state.
 %%%
-regpress_split_points(Blocks) ->
-    regpress_split_points(Blocks, cerl_sets:new()).
-
-regpress_split_points([], Splits) ->
-    Splits;
-regpress_split_points([{_,#b_blk{is=[#b_set{op=phi}|Is],last=L}}|Bs], Splits) ->
-    regpress_split_skip_phis(Is, L, Bs, Splits);
-regpress_split_points([{_,#b_blk{is=Is,last=L}}|Bs], Splits) ->
-    regpress_split_points(Is, unknown, L, Bs, Splits).
-
-%% Split after the last phi, unless the block only consists of phis.
-regpress_split_skip_phis([#b_set{op=phi}|Is], Last, Bs, Splits) ->
-    regpress_split_skip_phis(Is, Last, Bs, Splits);
-regpress_split_skip_phis([], _, Bs, Splits) ->
-    regpress_split_points(Bs, Splits);
-regpress_split_skip_phis([I|Is], Last, Bs, Splits) ->
-    regpress_split_points(Is, regpress_classify_i(I), Last, Bs, cerl_sets:add_element(I, Splits)).
-
-regpress_split_points([], _, _, Bs, Splits) ->
-    regpress_split_points(Bs, Splits);
-
-regpress_split_points([I=#b_set{dst=X},#b_set{dst=Y,op={succeeded,_},args=[X]}],
-                      _, #b_br{bool=Y}, Bs, Splits) ->
-    regpress_split_points(Bs, cerl_sets:add_element(I, Splits));
-regpress_split_points([I=#b_set{dst=D}], _, #b_br{bool=D}, Bs, Splits) ->
-    regpress_split_points(Bs, cerl_sets:add_element(I, Splits));
-regpress_split_points([I=#b_set{dst=D}], _, #b_switch{arg=D}, Bs, Splits) ->
-    regpress_split_points(Bs, cerl_sets:add_element(I, Splits));
-regpress_split_points([I|Is], Mode, Last, Bs, Splits) ->
-    case {Mode, regpress_classify_i(I)} of
-        {_,no_split} ->
-            regpress_split_points(Is, Mode, Last, Bs, Splits);
-        {unknown,NewMode} ->
-            regpress_split_points(Is, NewMode, Last, Bs, Splits);
-        {Mode,Mode} ->
-            regpress_split_points(Is, Mode, Last, Bs, Splits);
-        {Mode,NewMode} ->
-            regpress_split_points(Is, NewMode, Last, Bs,
-                                  cerl_sets:add_element(I, Splits))
-    end.
-
-regpress_classify_i(#b_set{op=phi}) ->
-    phi;
-regpress_classify_i(#b_set{op=kill_try_tag}) ->
-    side_effect;
-regpress_classify_i(#b_set{op=bs_add}) ->
-    side_effect;
-regpress_classify_i(#b_set{op=bs_init}) ->
-    side_effect;
-regpress_classify_i(#b_set{op=bs_init_writable}) ->
-    side_effect;
-regpress_classify_i(#b_set{op=bs_extract}) ->
-    side_effect;
-regpress_classify_i(#b_set{op=bs_match}) ->
-    side_effect;
-regpress_classify_i(#b_set{op=bs_start_match}) ->
-    side_effect;
-regpress_classify_i(#b_set{op=bs_test_tail}) ->
-    side_effect;
-regpress_classify_i(#b_set{op=bs_get_tail}) ->
-    side_effect;
-regpress_classify_i(#b_set{op=bs_put}) ->
-    side_effect;
-regpress_classify_i(#b_set{op=bs_utf16_size}) ->
-    side_effect;
-regpress_classify_i(#b_set{op=bs_utf8_size}) ->
-    side_effect;
-regpress_classify_i(#b_set{op={succeeded,_}}) ->
-    no_split;
-regpress_classify_i(I) ->
-    case beam_ssa:no_side_effect(I) of
-        true -> no_side_effect;
-        false -> side_effect
-    end.
+rpr_need_fc_dep_i(#b_set{op=bs_add}) ->
+    true;
+rpr_need_fc_dep_i(#b_set{op=bs_init}) ->
+    true;
+rpr_need_fc_dep_i(#b_set{op=bs_init_writable}) ->
+    true;
+rpr_need_fc_dep_i(#b_set{op=bs_extract}) ->
+    true;
+rpr_need_fc_dep_i(#b_set{op=bs_match}) ->
+    true;
+rpr_need_fc_dep_i(#b_set{op=bs_start_match}) ->
+    true;
+rpr_need_fc_dep_i(#b_set{op=bs_test_tail}) ->
+    true;
+rpr_need_fc_dep_i(#b_set{op=bs_get_tail}) ->
+    true;
+rpr_need_fc_dep_i(#b_set{op=bs_put}) ->
+    true;
+rpr_need_fc_dep_i(#b_set{op=bs_utf16_size}) ->
+    true;
+rpr_need_fc_dep_i(#b_set{op=bs_utf8_size}) ->
+    true;
+rpr_need_fc_dep_i(#b_set{op=extract}) ->
+    true;
+rpr_need_fc_dep_i(I) ->
+    not beam_ssa:no_side_effect(I).
 
 %%%
 %%% Undo the splits done by regpress_split/2
