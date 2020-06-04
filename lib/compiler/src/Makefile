@@ -62,6 +62,7 @@ MODULES =  \
 	beam_ssa \
 	beam_ssa_bool \
 	beam_ssa_bsm \
+	beam_ssa_callsites \
 	beam_ssa_codegen \
 	beam_ssa_dead \
 	beam_ssa_funs \

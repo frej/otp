@@ -29,8 +29,10 @@
 
 -spec module(beam_utils:module_code(), file:io_device()) -> 'ok'.
 
-module({Mod,_Exp,_Attr,Fs,_Lc}, IO) ->
-    Q = fold_funs(Mod, Fs, []),
+module({Mod,_Exp,Attr,Fs,_Lc}, IO) ->
+    {callsites, Info} = lists:keyfind(callsites, 1, Attr),
+    #{ total := Total, elide := Elide, sc := ShortCircuit} = Info,
+    Q = fold_funs(Mod, Fs, [{callsites, Total, Elide, ShortCircuit}]),
     io:format(IO, "~p.\n", [Q]),
     ok.
 

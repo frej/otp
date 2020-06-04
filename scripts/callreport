@@ -1,0 +1,121 @@
+#!/usr/bin/env escript
+%% -*- erlang -*-
+-mode(compile).
+
+-import(lists, [foldl/3, filter/2, sort/1, foreach/2, sort/2]).
+
+main(Args0) ->
+    {Base} = opts(Args0),
+    io:format("Reading ~p~n", [Base]),
+    B = read_qfiles(Base),
+    io:format("~p~n", [B]),
+    ok.
+
+sort_by_column(Rows, Col) ->
+    sort(fun(A={_,Map0},B={_,Map1}) ->
+                 case {maps:get(Col, Map0), maps:get(Col, Map1)} of
+                     {X,X} -> A < B;
+                     {X,Y} -> X < Y
+                 end
+         end,
+         Rows).
+
+to_html(Columns, Filename, Rows, Hist) ->
+    Out = ["<html>\n",
+           format_histogram(Hist),
+           "<table style=\"width:100%\">\n",
+           %% The header
+           "<tr><th>fun</th>",
+           [["<th style=\"text-align:right\">", atom_to_list(C), "</th>"]
+            || C <- Columns], "</tr>\n",
+           %% The functions
+           [["<tr><td>", io_lib:format("~p:~p/~p", [M,F,A]), "</td>",
+             [["<td style=\"text-align:right\">",
+               integer_to_list(maps:get(C, Data)), "</td>"]
+              || C <- Columns], "</tr>\n"]
+            || {{M,F,A}, Data} <- Rows],
+           "</table></html>\n"],
+    ok = file:write_file(Filename, Out).
+
+usage() ->
+    S = ["usage: qreport BASE_DIRECTORY OTHER_DIRECTORY OUTPUT_DIRECTORY\n\n"
+         "Options:\n"
+         "\n"
+         "DESCRIPTION\n"
+         "\n"
+         "Compare the quality report files in two directories against each"
+         " other\n"
+        ],
+    io:put_chars(S),
+    halt(1).
+
+opts([Base]) ->
+    {Base};
+opts(_) ->
+    usage().
+
+map_diff(A, B) ->
+    maps:map(fun(Key, Val) -> Val - maps:get(Key, B) end, A).
+
+any_value_nonzero(Map) ->
+    any_value_nonzero1(maps:values(Map)).
+any_value_nonzero1([]) ->
+    false;
+any_value_nonzero1([0|Rest]) ->
+    any_value_nonzero1(Rest);
+any_value_nonzero1(_) ->
+    true.
+
+read_qfiles(Dir) ->
+    foldl(fun(F, {Total0, Elide0, ShortCircuit0}) ->
+                  {ok,[D]} = file:consult(F),
+                  [{Total, Elide, ShortCircuit}] =
+                      [{X,Y,Z} || {callsites,X,Y,Z} <- D],
+                  {Total0+Total, Elide0+Elide, ShortCircuit0+ShortCircuit}
+          end,
+          {0,0,0},
+          filelib:wildcard(filename:join(Dir, "*.Q"))).
+
+histogram(Rows, Col) ->
+    H = foldl(fun({_Fun, Values}, Hist) ->
+                      N = maps:get(Col, Values),
+                      Old = maps:get(N, Hist, 0),
+                      Hist#{N => Old + 1}
+              end, #{}, Rows),
+    {Col,sort(maps:to_list(H))}.
+
+pc(Part, Total) ->
+    io_lib:format("~.1f", [100.0*Part/Total]).
+
+format_histogram({Key, Ls}) ->
+    {Total,Improved,NoChange,Worse} = foldl(fun({Delta,N}, {T,I,NC,W}) ->
+                                                    S = T + N,
+                                                    if Delta == 0 ->
+                                                            {S,I,NC + N,W};
+                                                       Delta < 0 ->
+                                                            {S,I + N,NC,W};
+                                                       Delta > 0 ->
+                                                            {S,I,NC,W + N}
+                                                    end
+                                            end, {0,0,0,0}, Ls),
+    ["<table>\n",
+     "<tr><th>Classification</th><th>Count</th><th>%</th></tr>\n",
+     "<tr><td>Better</td><td style=\"text-align:right\">",
+     integer_to_list(Improved), "</td><td style=\"text-align:right\">",
+     pc(Improved,Total), "</td></tr>\n",
+     "<tr><td>N/C</td><td style=\"text-align:right\">",
+     integer_to_list(NoChange), "</td><td style=\"text-align:right\">",
+     pc(NoChange,Total), "</td></tr>\n",
+     "<tr><td>Worse</td><td style=\"text-align:right\">",
+     integer_to_list(Worse), "</td><td style=\"text-align:right\">",
+     pc(Worse,Total), "</td></tr>\n",
+     "</table>\n",
+
+     "<table>\n",
+     "<tr><th>", atom_to_list(Key), " change</th>",
+     "<th>function count</th><th>%</th>",
+     [["<tr><td style=\"text-align:right\">", integer_to_list(Delta), "</td>",
+       "<td style=\"text-align:right\">", integer_to_list(Count), "</td>",
+       "<td style=\"text-align:right\">", pc(Count, Total), "</td>",
+       "</tr>"] || {Delta,Count} <- Ls],
+     "</table>\n"].
