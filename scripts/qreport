@@ -10,8 +10,21 @@ main(Args0) ->
               [Base, Other, OutDir]),
     B = read_qfiles(Base),
     O = read_qfiles(Other),
-    Funs = sets:to_list(sets:intersection(sets:from_list(maps:keys(B)),
-                                          sets:from_list(maps:keys(O)))),
+    UnfilteredFuns = sets:to_list(
+                       sets:intersection(sets:from_list(maps:keys(B)),
+                                         sets:from_list(maps:keys(O)))),
+    Funs = lists:filter(fun({beam_ssa_opt,_,_}) ->
+                                false;
+                           ({beam_ssa,_,_}) ->
+                                false;
+                           (_) ->
+                                true
+                        end,
+                        UnfilteredFuns),
+    io:format("~p functions in total~n", [length(UnfilteredFuns)]),
+    io:format("Supressed ~p functions~n",
+              [length(UnfilteredFuns) - length(Funs)]),
+    io:format("~p shown functions~n", [length(Funs)]),
     R = [{Fun, map_diff(maps:get(Fun, O), maps:get(Fun, B))} || Fun <- Funs],
     NonZero = filter(fun({_, Map}) -> any_value_nonzero(Map) end, R),
     [{_,Columns0}|_] = NonZero,
