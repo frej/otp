@@ -2676,6 +2676,7 @@ regpress_optimize_is(_L, Is, LastUses, {_LiveIn, LiveOut}) ->
 
     RequiredFCDeps = lists:filter(fun rpr_need_fc_dep_i/1, Is),
     rpr_add_fc_edges(PDG, RequiredFCDeps),
+    rpr_add_fp_box_edges(PDG, Is),
 
     ?regpressdbg_to_dot(PDG, "/tmp/dot/fc-pdg-" ++ integer_to_list(_L)++".dot"),
 
@@ -2704,6 +2705,25 @@ regpress_optimize_is(_L, Is, LastUses, {_LiveIn, LiveOut}) ->
     digraph:delete(PDG),
     digraph:delete(TreeG),
     Out.
+
+%%% Ensure that all floating-point boxing instructions that occur
+%%% before an x-clobbering instruction are scheduled before the
+%%% clobberer by adding flow-control edges where needed.
+rpr_add_fp_box_edges(PDG, Is) ->
+    rpr_add_fp_box_edges(PDG, Is, []).
+
+rpr_add_fp_box_edges(_, [], _) ->
+    ok;
+rpr_add_fp_box_edges(PDG, [#b_set{dst=D,op={float,get}}|Is], Boxers) ->
+    rpr_add_fp_box_edges(PDG, Is, [D|Boxers]);
+rpr_add_fp_box_edges(PDG, [I=#b_set{dst=D}|Is], Boxers) ->
+    case beam_ssa:clobbers_xregs(I) of
+        true ->
+            foreach(fun(From) -> rpr_ensure_fc_edge(PDG, From, D) end, Boxers),
+            rpr_add_fp_box_edges(PDG, Is, []);
+        false ->
+            rpr_add_fp_box_edges(PDG, Is, Boxers)
+    end.
 
 %%% Ensure that all instructions in Is have a def->use path between
 %%% them. Also make sure that the last instruction in Is has a path to
