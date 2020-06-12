@@ -42,28 +42,39 @@ module(Mod=#b_module{name=_Name,body=Body,attributes=As}, _Opts) ->
     Heads = analyze_heads(Funs, Targets),
     %% io:format("** ~p ** HEADS~n~p~n", [_Name, Heads]),
     io:format("~p calls~n", [length(Calls)]),
-    {Elide, ShortCircuit} = count_optimizable_calls(Calls, Heads, Funs),
+    {Elide, ShortCircuit,WElide,WShortCircuit} =
+        count_optimizable_calls(Calls, Heads, Funs),
     io:format("~p are possible to elide~n", [Elide]),
     io:format("~p are possible to short circuit~n", [ShortCircuit]),
+    io:format("~p weighted elides~n", [WElide]),
+    io:format("~p weighted short circuit~n", [WShortCircuit]),
     Info = {callsites,#{total => length(Calls),
                         elide => Elide,
-                        sc => ShortCircuit}},
+                        sc => ShortCircuit,
+                        welide => WElide,
+                        wsc => WShortCircuit}},
     {ok,Mod#b_module{attributes=[Info|As]}}.
 
 count_optimizable_calls(Calls, Heads, Funs) ->
-    count_optimizable_calls(Calls, 0, 0, Heads, Funs).
+    count_optimizable_calls(Calls, 0, 0, 0, 0, Heads, Funs).
 
-count_optimizable_calls([Call|Calls], Elide, ShortCircuit, Heads, Funs) ->
+count_optimizable_calls([Call|Calls], Elide, ShortCircuit,
+                        WElide, WShortCircuit, Heads, Funs) ->
     case analyze_call_arguments(Call, Heads, Funs) of
-        true ->
-            count_optimizable_calls(Calls, Elide, ShortCircuit + 1, Heads, Funs);
-        elide ->
-            count_optimizable_calls(Calls, Elide + 1, ShortCircuit, Heads, Funs);
+        X when is_integer(X), X > 0 ->
+            count_optimizable_calls(Calls, Elide, ShortCircuit + 1,
+                                    WElide, WShortCircuit + X,
+                                    Heads, Funs);
+        X when is_integer(X), X < 0 ->
+            count_optimizable_calls(Calls, Elide + 1, ShortCircuit,
+                                    WElide - X, WShortCircuit,
+                                    Heads, Funs);
         false ->
-            count_optimizable_calls(Calls, Elide, ShortCircuit, Heads, Funs)
+            count_optimizable_calls(Calls, Elide, ShortCircuit,
+                                    WElide, WShortCircuit, Heads, Funs)
     end;
-count_optimizable_calls([], Elide, ShortCircuit, _, _) ->
-    {Elide, ShortCircuit}.
+count_optimizable_calls([], Elide, ShortCircuit, WElide, WShortCircuit, _, _) ->
+    {Elide, ShortCircuit, WElide, WShortCircuit}.
 
 add_function(F, Map) ->
     {_,Fun,Arity} = beam_ssa:get_anno(func_info, F),
@@ -167,20 +178,20 @@ analyze_call_arguments({Caller, D, Callee, Args}, Heads, Funs) ->
 
             %% io:format("Looking at call to ~p at ~p, args: ~p~n",
             %%           [Callee, D, Args]),
-            analyze_call_arguments(D, Args, Hs, Defs);
+            analyze_call_arguments(1, D, Args, Hs, Defs);
         _ ->
             false
     end.
 
-analyze_call_arguments(_Loc, _Args, [], _Defs) ->
+analyze_call_arguments(_Depth, _Loc, _Args, [], _Defs) ->
     %% io:format("  No matching heads found~n~n"),
     false;
-analyze_call_arguments(Loc, Args, [{Cond,_Lbl}=_Head|Heads], Defs) ->
+analyze_call_arguments(Depth, Loc, Args, [{Cond,_Lbl}=_Head|Heads], Defs) ->
     %% io:format("  Looking at head ~p~n", [_Head]),
     case Cond of
         true ->
             %% The call could be elided.
-            elide;
+            -Depth;
         {{caller_arg,_},_} ->
             false;
         {ArgI,Op} ->
@@ -188,9 +199,9 @@ analyze_call_arguments(Loc, Args, [{Cond,_Lbl}=_Head|Heads], Defs) ->
             case analyze_cond(Op, Arg, Defs) of
                 true ->
                     %% io:format("  ==> can call ~p directly~n", [Lbl]),
-                    true;
+                    Depth;
                 false ->
-                    analyze_call_arguments(Loc, Args, Heads, Defs)
+                    analyze_call_arguments(Depth + 1, Loc, Args, Heads, Defs)
             end
     end.
 

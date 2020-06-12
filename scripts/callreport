@@ -7,8 +7,12 @@
 main(Args0) ->
     {Base} = opts(Args0),
     io:format("Reading ~p~n", [Base]),
-    B = read_qfiles(Base),
-    io:format("~p~n", [B]),
+    {Total, Elide, ShortCircuit, WElide, WShortCircuit} = read_qfiles(Base),
+    io:format("~p total call sites~n", [Total]),
+    io:format("~p are possible to elide~n", [Elide]),
+    io:format("~p are possible to short circuit~n", [ShortCircuit]),
+    io:format("~p weighted elides~n", [WElide]),
+    io:format("~p weighted short circuit~n", [WShortCircuit]),
     ok.
 
 sort_by_column(Rows, Col) ->
@@ -67,13 +71,14 @@ any_value_nonzero1(_) ->
     true.
 
 read_qfiles(Dir) ->
-    foldl(fun(F, {Total0, Elide0, ShortCircuit0}) ->
+    foldl(fun(F, {Total0, Elide0, ShortCircuit0, WElide0, WShortCircuit0}) ->
                   {ok,[D]} = file:consult(F),
-                  [{Total, Elide, ShortCircuit}] =
-                      [{X,Y,Z} || {callsites,X,Y,Z} <- D],
-                  {Total0+Total, Elide0+Elide, ShortCircuit0+ShortCircuit}
+                  [{Total, Elide, ShortCircuit, WElide, WShortCircuit}] =
+                      [{T,E,S,WE,WS} || {callsites,T,E,S,WE,WS} <- D],
+                  {Total0+Total, Elide0+Elide, ShortCircuit0+ShortCircuit,
+                   WElide0+WElide, WShortCircuit0+WShortCircuit}
           end,
-          {0,0,0},
+          {0,0,0,0,0},
           filelib:wildcard(filename:join(Dir, "*.Q"))).
 
 histogram(Rows, Col) ->

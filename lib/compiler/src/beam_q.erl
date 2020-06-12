@@ -31,8 +31,11 @@
 
 module({Mod,_Exp,Attr,Fs,_Lc}, IO) ->
     {callsites, Info} = lists:keyfind(callsites, 1, Attr),
-    #{ total := Total, elide := Elide, sc := ShortCircuit} = Info,
-    Q = fold_funs(Mod, Fs, [{callsites, Total, Elide, ShortCircuit}]),
+    #{ total := Total,
+       elide := Elide, sc := ShortCircuit,
+       welide := WElide, wsc := WShortCircuit} = Info,
+    Q = fold_funs(Mod, Fs, [{callsites, Total,
+                             Elide, ShortCircuit, WElide, WShortCircuit}]),
     io:format(IO, "~p.\n", [Q]),
     ok.
 
