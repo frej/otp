@@ -8,8 +8,14 @@ main(Args0) ->
     {Base,Other,OutDir} = opts(Args0),
     io:format("Comparing ~p against ~p, writing output to ~p~n",
               [Base, Other, OutDir]),
-    B = read_qfiles(Base),
-    O = read_qfiles(Other),
+    B0 = read_qfiles(Base),
+    Bc = read_cfiles(Base),
+    O0 = read_qfiles(Other),
+
+    B = add_loaded_counts(B0, Bc),
+    O = add_loaded_counts(O0, read_cfiles(Other)),
+
+
     UnfilteredFuns = sets:to_list(
                        sets:intersection(sets:from_list(maps:keys(B)),
                                          sets:from_list(maps:keys(O)))),
@@ -42,7 +48,8 @@ main(Args0) ->
 
 sort_by_column(Rows, Col) ->
     sort(fun(A={_,Map0},B={_,Map1}) ->
-                 case {maps:get(Col, Map0), maps:get(Col, Map1)} of
+                 case {maps:get(Col, Map0, false),
+                       maps:get(Col, Map1, false)} of
                      {X,X} -> A < B;
                      {X,Y} -> X < Y
                  end
@@ -60,7 +67,10 @@ to_html(Columns, Filename, Rows, Hist) ->
            %% The functions
            [["<tr><td>", io_lib:format("~p:~p/~p", [M,F,A]), "</td>",
              [["<td style=\"text-align:right\">",
-               integer_to_list(maps:get(C, Data)), "</td>"]
+               case maps:get(C, Data, false) of
+                   false -> "n/a";
+                   V -> integer_to_list(V)
+               end, "</td>"]
               || C <- Columns], "</tr>\n"]
             || {{M,F,A}, Data} <- Rows],
            "</table></html>\n"],
@@ -96,16 +106,22 @@ any_value_nonzero1(_) ->
     true.
 
 read_qfiles(Dir) ->
+    read_pair_files(Dir, "*.Q").
+
+read_cfiles(Dir) ->
+    read_pair_files(Dir, "*.counts").
+
+read_pair_files(Dir, Wildcard) ->
     foldl(fun(F, Data) ->
                   {ok,[D]} = file:consult(F),
                   maps:merge(maps:from_list(D), Data)
           end,
           #{},
-          filelib:wildcard(filename:join(Dir, "*.Q"))).
+          filelib:wildcard(filename:join(Dir, Wildcard))).
 
 histogram(Rows, Col) ->
     H = foldl(fun({_Fun, Values}, Hist) ->
-                      N = maps:get(Col, Values),
+                      N = maps:get(Col, Values, 'n/a'),
                       Old = maps:get(N, Hist, 0),
                       Hist#{N => Old + 1}
               end, #{}, Rows),
@@ -117,7 +133,9 @@ pc(Part, Total) ->
 format_histogram({Key, Ls}) ->
     {Total,Improved,NoChange,Worse} = foldl(fun({Delta,N}, {T,I,NC,W}) ->
                                                     S = T + N,
-                                                    if Delta == 0 ->
+                                                    if Delta =:= 'n/a' ->
+                                                            {S,I,NC,W};
+                                                       Delta == 0 ->
                                                             {S,I,NC + N,W};
                                                        Delta < 0 ->
                                                             {S,I + N,NC,W};
@@ -141,8 +159,23 @@ format_histogram({Key, Ls}) ->
      "<table>\n",
      "<tr><th>", atom_to_list(Key), " change</th>",
      "<th>function count</th><th>%</th>",
-     [["<tr><td style=\"text-align:right\">", integer_to_list(Delta), "</td>",
+     [["<tr><td style=\"text-align:right\">",
+       case Delta of
+           'n/a' -> "n/a";
+            _ -> integer_to_list(Delta)
+       end,
+       "</td>",
        "<td style=\"text-align:right\">", integer_to_list(Count), "</td>",
        "<td style=\"text-align:right\">", pc(Count, Total), "</td>",
        "</tr>"] || {Delta,Count} <- Ls],
      "</table>\n"].
+
+add_loaded_counts(Info, Counts) ->
+    maps:map(fun(MFA, Map) ->
+                     case Counts of
+                         #{ MFA := Count } ->
+                             Map#{loaded_instructions=>Count};
+                         _ ->
+                             Map
+                     end
+             end, Info).
