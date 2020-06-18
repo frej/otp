@@ -346,8 +346,11 @@ compile_to_dis({File,Opts}, OutDir) ->
             Dis0 = disasm(NewMod, Beam),
             Dis1 = renumber_disasm(Dis0, Mod, NewMod),
             Dis = format_disasm(Dis1),
+            Counts = count_instructions(Mod, Dis1),
             OutFile = filename:join(OutDir, atom_to_list(Mod)++".dis"),
-            ok = file:write_file(OutFile, Dis)
+            ok = file:write_file(OutFile, Dis),
+            CountFile = filename:join(OutDir, atom_to_list(Mod)++".counts"),
+            ok = file:write_file(CountFile, io_lib:format("~p.~n", [Counts]))
     end.
 
 dis_only(File, OutDir) ->
@@ -639,3 +642,7 @@ format_spec({File, _Options}) when is_list(File) ->
     File;
 format_spec(Spec) ->
     io_lib:format("~p", [Spec]).
+
+%% Count the number of instructions per function
+count_instructions(ModName, Funs) ->
+    [{{ModName,F,A},length(Is)} || {F,A,Is} <- Funs].
