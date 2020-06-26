@@ -27,7 +27,8 @@ main(Args0) ->
                                 true
                         end,
                         UnfilteredFuns),
-    io:format("~p functions in total~n", [length(UnfilteredFuns)]),
+    TotalNoofFuns = length(UnfilteredFuns),
+    io:format("~p functions in total~n", [TotalNoofFuns]),
     io:format("Supressed ~p functions~n",
               [length(UnfilteredFuns) - length(Funs)]),
     io:format("~p shown functions~n", [length(Funs)]),
@@ -42,7 +43,7 @@ main(Args0) ->
                     Filename =
                         filename:join(OutDir, atom_to_list(Col) ++ ".html"),
                     ok = filelib:ensure_dir(Filename),
-                    to_html(Columns, Filename, Sorted, Hist)
+                    to_html(Columns, Filename, Sorted, Hist, TotalNoofFuns)
             end, Columns),
     ok.
 
@@ -56,9 +57,9 @@ sort_by_column(Rows, Col) ->
          end,
          Rows).
 
-to_html(Columns, Filename, Rows, Hist) ->
+to_html(Columns, Filename, Rows, Hist, TotalNoofFuns) ->
     Out = ["<html>\n",
-           format_histogram(Hist),
+           format_histogram(Hist, TotalNoofFuns),
            "<table style=\"width:100%\">\n",
            %% The header
            "<tr><th>fun</th>",
@@ -130,7 +131,7 @@ histogram(Rows, Col) ->
 pc(Part, Total) ->
     io_lib:format("~.1f", [100.0*Part/Total]).
 
-format_histogram({Key, Ls}) ->
+format_histogram({Key, Ls}, TotalNoofFuns) ->
     {Total,Improved,NoChange,Worse} = foldl(fun({Delta,N}, {T,I,NC,W}) ->
                                                     S = T + N,
                                                     if Delta =:= 'n/a' ->
@@ -144,16 +145,19 @@ format_histogram({Key, Ls}) ->
                                                     end
                                             end, {0,0,0,0}, Ls),
     ["<table>\n",
-     "<tr><th>Classification</th><th>Count</th><th>%</th></tr>\n",
+     "<tr><th>Classification</th><th>Count</th><th>%<br>changed</th><th>%<br>all</th></tr>\n",
      "<tr><td>Better</td><td style=\"text-align:right\">",
      integer_to_list(Improved), "</td><td style=\"text-align:right\">",
-     pc(Improved,Total), "</td></tr>\n",
+     pc(Improved,Total), "</td><td style=\"text-align:right\">",
+     pc(Improved,TotalNoofFuns), "</td></tr>\n",
      "<tr><td>N/C</td><td style=\"text-align:right\">",
      integer_to_list(NoChange), "</td><td style=\"text-align:right\">",
-     pc(NoChange,Total), "</td></tr>\n",
+     pc(NoChange,Total), "</td><td style=\"text-align:right\">",
+     pc(Improved,TotalNoofFuns), "</td></tr>\n",
      "<tr><td>Worse</td><td style=\"text-align:right\">",
      integer_to_list(Worse), "</td><td style=\"text-align:right\">",
-     pc(Worse,Total), "</td></tr>\n",
+     pc(Worse,Total), "</td><td style=\"text-align:right\">",
+     pc(Improved,TotalNoofFuns), "</td></tr>\n",
      "</table>\n",
 
      "<table>\n",
