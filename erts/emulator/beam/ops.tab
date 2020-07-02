@@ -118,7 +118,9 @@ i_trim N | move Src=c Dst=x==0 => move_trim Src Dst N
 trim N Remaining => i_trim N
 
 move_trim y x t
+%cold
 move_trim c r t
+%hot
 i_trim t
 
 test_heap I t?
