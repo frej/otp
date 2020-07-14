@@ -102,10 +102,10 @@ elide_calls([#b_set{op=call,
     Acc = case attempt_fold(TypedArgs, Heads) of
               false -> Acc0;
               {elide,#b_literal{}=R} ->
-                  ?dp("Elide!~n"),
+                  io:format("Elide!~n"),
                   [{D,R}|Acc0];
               {elide,{argument,Idx}} ->
-                  ?dp("Elide!~n"),
+                  io:format("Elide!~n"),
                   [{D,lists:nth(Idx + 1, Args)}|Acc0]
           end,
     elide_calls(Is, Caller, FuncDb, Acc);
@@ -469,6 +469,22 @@ eval_guard({bif,'=:=',#b_literal{val=V}}, _) when is_tuple(V) ->
 eval_guard({bif,is_pid}, _) ->
     undetermined;
 
+eval_guard({is_tagged_tuple,S,Tag}, #t_tuple{size=S,exact=true, elements=Es}) ->
+    case Es of
+        #{ 1 := #t_atom{elements=any} } ->
+            undetermined;
+        #{ 1 := #t_atom{elements=Atoms} } ->
+            io:format("IS_TAGGED_TUPLE~n"),
+            ordsets:is_element(Tag, Atoms);
+        _ ->
+            undetermined
+    end;
+eval_guard({is_tagged_tuple,S0,_}, #t_tuple{size=S1,exact=true})
+  when S0 =/= S1->
+    false;
+eval_guard({is_tagged_tuple,_,_}, _) ->
+    undetermined;
+
 %% These are to silence things we know about but cannot do anything
 %% useful with
 eval_guard({bif,'>',#b_literal{val=V}}, number) when is_number(V) ->
@@ -665,6 +681,15 @@ analyze_bool(B, Args, Defs) ->
             case Args of
                 #{ Var := Idx } ->
                     {Idx, {bif, Bif, V}};
+                _ ->
+                    false
+            end;
+        #{ B := #b_set{op=is_tagged_tuple,
+                       args=[Var,#b_literal{val=A},#b_literal{val=T}]}
+         } when is_integer(A), is_atom(T) ->
+            case Args of
+                #{ Var := Idx } ->
+                    {Idx, {is_tagged_tuple,A,T}};
                 _ ->
                     false
             end;
