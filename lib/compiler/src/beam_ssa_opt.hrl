@@ -47,7 +47,13 @@
          %%
          %% Note that the argument types are those seen on successful return,
          %% they do not cover all types that are provided to the function.
-         succ_types = [] :: success_type_set()}).
+         succ_types = [] :: success_type_set(),
+
+         %% A head is a list of conditions on the arguments to the
+         %% function with associated function return values. It is
+         %% used by the beam_ssa_elide_call pass to remove unnecessary
+         %% function calls.
+         heads = [] :: [{Condition :: term(), Result :: term()}]}).
 
 -type arg_key() :: {CallerId :: func_id(),
                     CallDst :: beam_ssa:b_var()}.

@@ -266,6 +266,10 @@ module_passes(Opts) ->
     Ps0 = [{ssa_opt_type_start,
             fun({StMap, FuncDb}) ->
                     beam_ssa_type:opt_start(StMap, FuncDb)
+            end},
+           {ssa_opt_elide_start,
+            fun({StMap, FuncDb}) ->
+                    beam_ssa_elide_call:module(StMap, FuncDb)
             end}],
     passes_1(Ps0, Opts).
 
@@ -281,8 +285,9 @@ repeated_passes(Opts) ->
           ?PASS(ssa_opt_sink),
           ?PASS(ssa_opt_tuple_size),
           ?PASS(ssa_opt_record),
-          ?PASS(ssa_opt_type_continue)],        %Must run after ssa_opt_dead to
-                                                %clean up phi nodes.
+          ?PASS(ssa_opt_type_continue), %Must run after ssa_opt_dead to
+                                        %clean up phi nodes.
+          ?PASS(ssa_opt_elide_calls)],  %Must run after ssa_opt_type_continue
     passes_1(Ps, Opts).
 
 epilogue_passes(Opts) ->
@@ -454,6 +459,11 @@ ssa_opt_trim_unreachable({#opt_st{ssa=Blocks}=St, FuncDb}) ->
 ssa_opt_merge_blocks({#opt_st{ssa=Blocks0}=St, FuncDb}) ->
     Blocks = beam_ssa:merge_blocks(Blocks0),
     {St#opt_st{ssa=Blocks}, FuncDb}.
+
+ssa_opt_elide_calls({#opt_st{ssa=Linear0,args=Args,anno=Anno}=St0, FuncDb0}) ->
+    {Linear, FuncDb} =
+        beam_ssa_elide_call:function(Linear0, Args, Anno, FuncDb0),
+    {St0#opt_st{ssa=Linear}, FuncDb}.
 
 %%%
 %%% Split blocks before certain instructions to enable more optimizations.

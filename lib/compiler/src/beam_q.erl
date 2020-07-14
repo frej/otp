@@ -29,8 +29,9 @@
 
 -spec module(beam_utils:module_code(), file:io_device()) -> 'ok'.
 
-module({Mod,_Exp,_Attr,Fs,_Lc}, IO) ->
-    Q = fold_funs(Mod, Fs, []),
+module({Mod,_Exp,Attr,Fs,_Lc}, IO) ->
+    Elide = {elide, _} = lists:keyfind(elide, 1, Attr),
+    Q = fold_funs(Mod, Fs, [Elide]),
     io:format(IO, "~p.\n", [Q]),
     ok.
 

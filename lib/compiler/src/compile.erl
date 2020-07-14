@@ -2159,6 +2159,7 @@ pre_load() ->
 	 beam_ssa_bsm,
 	 beam_ssa_codegen,
 	 beam_ssa_dead,
+         beam_ssa_elide_call,
          beam_ssa_funs,
 	 beam_ssa_opt,
 	 beam_ssa_pre_codegen,
