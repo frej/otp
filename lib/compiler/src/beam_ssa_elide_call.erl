@@ -592,6 +592,14 @@ analyze_guarded_bb(false, _, _, _, _, _)->
     %% We cannot statically determine the result of the guard, so give
     %% up.
     [];
+analyze_guarded_bb(Condition, GuardedBlock=#b_blk{last=#b_br{succ=S,fail=S}},
+                   FallthroughBlock, Blocks, Args, Defs) ->
+    case has_side_effects(GuardedBlock) of
+        true -> [];
+        false -> analyze_guarded_bb(Condition,
+                                    maps:get(S, Blocks),
+                                    FallthroughBlock, Blocks, Args, Defs)
+    end;
 analyze_guarded_bb(Condition, GuardedBlock, FallthroughBlock,
                    Blocks, Args, Defs) ->
     Result = case has_side_effects(GuardedBlock) of
@@ -614,9 +622,7 @@ analyze_side_effect_free_bb(Block=#b_blk{last=Last}, Blocks, Args, Defs) ->
                 Result -> [{true,Result}]
             end;
         #b_br{succ=D,fail=D} ->
-            %% TODO: Consider if this should be allowed, we would need
-            %% protection against loops.
-            [];
+            analyze_bb(maps:get(D, Blocks), Blocks, Args, Defs);
         #b_br{bool=Guard,succ=S,fail=F} ->
             analyze_guarded_bb(analyze_bool(Guard, Args, Defs),
                                maps:get(S, Blocks),  maps:get(F, Blocks),
@@ -648,15 +654,10 @@ block_result(#b_blk{last=#b_ret{arg=R}}, Args, _Defs) ->
         #{ R := Idx } -> {argument,Idx};
         _ -> false
     end;
-block_result(#b_blk{last=#b_ret{}}, _Args, _Defs) ->
-    %% TODO: this could potentially be constant folded into the
-    %% caller, but for now ignore it
-    false;
 block_result(#b_blk{last=#b_switch{}}, _Args, _Defs) ->
     %% TODO: Support switches
     false;
-block_result(#b_blk{last=#b_br{}}, _Args, _Defs) ->
-    %% TODO: Follow unconditional branches?
+block_result(#b_blk{last=#b_br{succ=S,fail=F}}, _Args, _Defs) when S =/= F ->
     false.
 
 %%% Analyze a boolean expression to tell if can be expressed as a
