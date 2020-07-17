@@ -20,12 +20,14 @@ main(Args0) ->
                                     end, Guards),
     io:format("~p with more than one guard~n", [maps:size(InterestingGuards)]),
 
-    Hist = maps:fold(fun(_MFA, Gs, H) ->
-                             N = length(Gs) - 1,
-                             Old = maps:get(N, H, 0),
-                             H#{N => Old + 1}
-                     end, #{}, InterestingGuards),
+    Hist = histogram(InterestingGuards),
     io:format("~p~n", [Hist]),
+
+    TagTests = maps:filter(fun(_, Gs) -> only_tag_tests(Gs) end,
+                           InterestingGuards),
+    TTH = histogram(TagTests),
+    io:format("tag-tests only:~n~p~n", [TTH]),
+
     ok.
 
 usage() ->
@@ -55,3 +57,59 @@ read_pair_files(Dir, Wildcard) ->
           end,
           #{},
           filelib:wildcard(filename:join(Dir, Wildcard))).
+
+histogram(Guards) ->
+    maps:fold(fun(_MFA, Gs, H) ->
+                      N = length(Gs) - 1,
+                      Old = maps:get(N, H, 0),
+                      H#{N => Old + 1}
+              end, #{}, Guards).
+
+only_tag_tests([{true,_}]) ->
+    true;
+only_tag_tests([{{_,is_nonempty_list},_}|Rest]) ->
+    only_tag_tests(Rest);
+only_tag_tests([{{_,{bif,'=:=',{b_literal,[]}}},_}|Rest]) ->
+    only_tag_tests(Rest);
+only_tag_tests([{{_,{bif,is_atom}},_}|Rest]) ->
+    only_tag_tests(Rest);
+only_tag_tests([{{_,{bif,is_bitstring}},_}|Rest]) ->
+    only_tag_tests(Rest);
+only_tag_tests([{{_,{bif,is_binary}},_}|Rest]) ->
+    only_tag_tests(Rest);
+only_tag_tests([{{_,{bif,is_float}},_}|Rest]) ->
+    only_tag_tests(Rest);
+only_tag_tests([{{_,{bif,is_function,{b_literal,_}}},_}|Rest]) ->
+    only_tag_tests(Rest);
+only_tag_tests([{{_,{bif,is_function}},_}|Rest]) ->
+    only_tag_tests(Rest);
+only_tag_tests([{{_,{bif,is_integer}},_}|Rest]) ->
+    only_tag_tests(Rest);
+only_tag_tests([{{_,{bif,is_list}},_}|Rest]) ->
+    only_tag_tests(Rest);
+only_tag_tests([{{_,{bif,is_map}},_}|Rest]) ->
+    only_tag_tests(Rest);
+only_tag_tests([{{_,{bif,is_number}},_}|Rest]) ->
+    only_tag_tests(Rest);
+only_tag_tests([{{_,{bif,is_pid}},_}|Rest]) ->
+    only_tag_tests(Rest);
+only_tag_tests([{{_,{bif,is_port}},_}|Rest]) ->
+    only_tag_tests(Rest);
+only_tag_tests([{{_,{bif,is_reference}},_}|Rest]) ->
+    only_tag_tests(Rest);
+only_tag_tests([{{_,{bif,is_tuple}},_}|Rest]) ->
+    only_tag_tests(Rest);
+
+%%
+only_tag_tests([{{_,{bif,'=:=',{b_literal,_}}},_}|_]) ->
+    false;
+only_tag_tests([{{_,{is_tagged_tuple,_,_}},_}|_]) ->
+    false;
+only_tag_tests([{{_,{bif,O,_}},_}|_])
+  when O =:= '>=' ; O =:= '=<' ; O =:= '==' ; O =:= '=:=' ;
+       O == '<' ; O =:= '>' ->
+    false;
+
+only_tag_tests(Guards) ->
+    io:format("!!~p~n", [Guards]),
+    false.
