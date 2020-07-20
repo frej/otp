@@ -65,6 +65,7 @@ MODULES =  \
 	beam_ssa_codegen \
 	beam_ssa_dead \
 	beam_ssa_funs \
+	beam_ssa_guard_chains \
 	beam_ssa_lint \
 	beam_ssa_opt \
 	beam_ssa_pp \
