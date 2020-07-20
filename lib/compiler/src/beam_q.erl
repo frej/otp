@@ -29,8 +29,9 @@
 
 -spec module(beam_utils:module_code(), file:io_device()) -> 'ok'.
 
-module({Mod,_Exp,_Attr,Fs,_Lc}, IO) ->
-    Q = fold_funs(Mod, Fs, []),
+module({Mod,_Exp,Attr,Fs,_Lc}, IO) ->
+    Guards = {guard_chains, _} = lists:keyfind(guard_chains, 1, Attr),
+    Q = fold_funs(Mod, Fs, [Guards]),
     io:format(IO, "~p.\n", [Q]),
     ok.
 

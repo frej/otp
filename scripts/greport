@@ -1,0 +1,122 @@
+#!/usr/bin/env escript
+%% -*- erlang -*-
+-mode(compile).
+
+-import(lists, [foldl/3, filter/2, sort/1, foreach/2, sort/2]).
+
+main(Args0) ->
+    {Base,OutDir} = opts(Args0),
+    io:format("Reading from ~p, writing output to ~p~n",
+              [Base, OutDir]),
+    Guards = read_gfiles(Base),
+    TotalNoofFuns = maps:size(Guards),
+    io:format("~p functions in total~n", [TotalNoofFuns]),
+    InterestingGuards = maps:filter(fun(_, []) ->
+                                            false;
+                                       (_, [_,{true,_}]) ->
+                                            false;
+                                       (_, _) ->
+                                            true
+                                    end, Guards),
+    io:format("~p with more than one guard~n", [maps:size(InterestingGuards)]),
+
+    Hist = histogram(InterestingGuards),
+    io:format("~p~n", [Hist]),
+
+    TagTests = maps:filter(fun(_, Gs) -> only_tag_tests(Gs) end,
+                           InterestingGuards),
+    TTH = histogram(TagTests),
+    io:format("tag-tests only:~n~p~n", [TTH]),
+
+    ok.
+
+usage() ->
+    S = ["usage: qreport BASE_DIRECTORY OTHER_DIRECTORY OUTPUT_DIRECTORY\n\n"
+         "Options:\n"
+         "\n"
+         "DESCRIPTION\n"
+         "\n"
+         "Compare the quality report files in two directories against each"
+         " other\n"
+        ],
+    io:put_chars(S),
+    halt(1).
+
+opts([Base,Out]) ->
+    {Base,Out};
+opts(_) ->
+    usage().
+
+read_gfiles(Dir) ->
+    read_pair_files(Dir, "*.G").
+
+read_pair_files(Dir, Wildcard) ->
+    foldl(fun(F, Data) ->
+                  {ok,[D]} = file:consult(F),
+                  maps:merge(maps:from_list(D), Data)
+          end,
+          #{},
+          filelib:wildcard(filename:join(Dir, Wildcard))).
+
+histogram(Guards) ->
+    maps:fold(fun(_MFA, Gs, H) ->
+                      N = length(Gs) - 1,
+                      Old = maps:get(N, H, 0),
+                      H#{N => Old + 1}
+              end, #{}, Guards).
+
+only_tag_tests([{true,_}]) ->
+    true;
+only_tag_tests(Gs=[{{Arg,_},_}|_]) ->
+    only_tag_tests(Arg, Gs).
+
+only_tag_tests(_, [{true,_}]) ->
+    true;
+only_tag_tests(Arg, [{{Arg,is_nonempty_list},_}|Rest]) ->
+    only_tag_tests(Arg, Rest);
+only_tag_tests(Arg, [{{Arg,{bif,'=:=',{b_literal,[]}}},_}|Rest]) ->
+    only_tag_tests(Arg, Rest);
+only_tag_tests(Arg, [{{Arg,{bif,is_atom}},_}|Rest]) ->
+    only_tag_tests(Arg, Rest);
+only_tag_tests(Arg, [{{Arg,{bif,is_bitstring}},_}|Rest]) ->
+    only_tag_tests(Arg, Rest);
+only_tag_tests(Arg, [{{Arg,{bif,is_binary}},_}|Rest]) ->
+    only_tag_tests(Arg, Rest);
+only_tag_tests(Arg, [{{Arg,{bif,is_float}},_}|Rest]) ->
+    only_tag_tests(Arg, Rest);
+only_tag_tests(Arg, [{{Arg,{bif,is_function,{b_literal,_}}},_}|Rest]) ->
+    only_tag_tests(Arg, Rest);
+only_tag_tests(Arg, [{{Arg,{bif,is_function}},_}|Rest]) ->
+    only_tag_tests(Arg, Rest);
+only_tag_tests(Arg, [{{Arg,{bif,is_integer}},_}|Rest]) ->
+    only_tag_tests(Arg, Rest);
+only_tag_tests(Arg, [{{Arg,{bif,is_list}},_}|Rest]) ->
+    only_tag_tests(Arg, Rest);
+only_tag_tests(Arg, [{{Arg,{bif,is_map}},_}|Rest]) ->
+    only_tag_tests(Arg, Rest);
+only_tag_tests(Arg, [{{Arg,{bif,is_number}},_}|Rest]) ->
+    only_tag_tests(Arg, Rest);
+only_tag_tests(Arg, [{{Arg,{bif,is_pid}},_}|Rest]) ->
+    only_tag_tests(Arg, Rest);
+only_tag_tests(Arg, [{{Arg,{bif,is_port}},_}|Rest]) ->
+    only_tag_tests(Arg, Rest);
+only_tag_tests(Arg, [{{Arg,{bif,is_reference}},_}|Rest]) ->
+    only_tag_tests(Arg, Rest);
+only_tag_tests(Arg, [{{Arg,{bif,is_tuple}},_}|Rest]) ->
+    only_tag_tests(Arg, Rest);
+
+%%
+only_tag_tests(Arg, [{{Arg,{bif,'=:=',{b_literal,_}}},_}|_]) ->
+    false;
+only_tag_tests(Arg, [{{Arg,{is_tagged_tuple,_,_}},_}|_]) ->
+    false;
+only_tag_tests(Arg, [{{Arg,{bif,O,_}},_}|_])
+  when O =:= '>=' ; O =:= '=<' ; O =:= '==' ; O =:= '=:=' ;
+       O == '<' ; O =:= '>' ->
+    false;
+
+only_tag_tests(Arg, [{{Other,_},_}|_]) when Arg =/= Other ->
+    false;
+only_tag_tests(_Arg, Guards) ->
+    io:format("!!~p~n", [Guards]),
+    false.

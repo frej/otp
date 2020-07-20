@@ -912,6 +912,7 @@ asm_passes() ->
        {iff,diffable,?pass(diffable)},
        {pass,beam_z},
        {iff,dq,?pass(beam_q)},
+       {iff,dg,?pass(beam_g)},
        {iff,diffable,{listing,"S"}},
        {iff,dz,{listing,"z"}},
        {iff,dopt,{listing,"optimize"}},
@@ -2196,6 +2197,20 @@ beam_q(Code, St) ->
     case file:open(File, [write,delayed_write]) of
 	{ok,S} ->
             beam_q:module(Code, S),
+	    ok = file:close(S),
+	    {ok,Code,St};
+	{error,Error} ->
+	    Es = [{File,[{none,compile,{write_error,Error}}]}],
+	    {error,St#compile{errors=St#compile.errors ++ Es}}
+    end.
+
+beam_g(Code, St) ->
+    File = outfile(St#compile.base, "G", St#compile.options),
+    case file:open(File, [write,delayed_write]) of
+	{ok,S} ->
+            {_Mod,_Exp,Attr,_Fs,_Lc} = Code,
+            {guard_chains, Guards} = lists:keyfind(guard_chains, 1, Attr),
+            io:format(S, "~p.~n", [Guards]),
 	    ok = file:close(S),
 	    {ok,Code,St};
 	{error,Error} ->
