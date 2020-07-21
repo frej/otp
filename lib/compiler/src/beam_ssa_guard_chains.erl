@@ -52,16 +52,17 @@ module(#b_module{body=Fs0,attributes=As}=Module, Opts) ->
     Fs = [ F || {F,_} <- Info],
     {ok,Module#b_module{body=Fs,attributes=[{guard_chains,Guards}|As]}}.
 
-function(F=#b_function{bs=Bs,args=Args,anno=Anno}, _Opts) ->
+function(F=#b_function{bs=Bs0,args=Args,anno=Anno,cnt=Cnt0}, _Opts) ->
     MFA = maps:get(func_info, Anno),
-    R = analyze_head(Bs, Args),
+    R = analyze_head(Bs0, Args),
     case lists:reverse(R) of % Check that the format is what we expect
         [{true,_}|_] -> ok;
         [] -> ok
     end,
     case only_tag_tests(R) of
         true ->
-            {F,{MFA,R}};
+            {Bs, Cnt} = insert_markers(R, 0, length(R) - 1, Bs0, Cnt0),
+            {F#b_function{bs=Bs,cnt=Cnt},{MFA,R}};
         false ->
             {F,{MFA,[]}}
     end.
@@ -269,3 +270,14 @@ only_tag_tests(Arg, [{{Other,_},_}|_]) when Arg =/= Other ->
 only_tag_tests(_Arg, Guards) ->
     io:format("!!~p~n", [Guards]),
     false.
+
+insert_markers([], _Idx, _Order, Bs, Cnt0) ->
+    {Bs,Cnt0};
+insert_markers([{_,BB}|Guards], Idx, Order, Bs, Cnt0) ->
+    Blk0 = #b_blk{is=Is0} = maps:get(BB, Bs),
+    Is = [#b_set{op=gchain,
+                 dst=#b_var{name={ignored,Cnt0}},
+                 args=[#b_literal{val=Order},
+                       #b_literal{val=Idx}]}|Is0],
+    Blk = Blk0#b_blk{is=Is},
+    insert_markers(Guards, Idx + 1, Order, Bs#{ BB => Blk }, Cnt0 + 1).
