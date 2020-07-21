@@ -122,14 +122,8 @@ analyze_entry_bb(#b_blk{last=#b_ret{}}, _Blocks, _Args, _Defs) ->
 analyze_entry_bb(#b_blk{last=#b_switch{}}, _Blocks, _Args, _Defs) ->
     %% TODO: Support switches
     [];
-analyze_entry_bb(Block=#b_blk{last=#b_br{succ=D,fail=D}},
-                 Blocks, Args, Defs) ->
-    case has_side_effects(Block) of
-        true ->
-            [];
-        false ->
-            analyze_entry_bb(maps:get(D, Blocks), Blocks, Args, Defs)
-    end;
+analyze_entry_bb(#b_blk{last=#b_br{succ=D,fail=D}}, _Blocks, _Args, _Defs) ->
+    [];
 analyze_entry_bb(Block=#b_blk{last=#b_br{bool=B,succ=S,fail=F}},
                  Blocks, Args, Defs) ->
     case has_side_effects(Block) of
@@ -157,8 +151,7 @@ analyze_bb(Lbl, Blocks, Args, Defs) ->
 analyze_side_effect_free_bb(Lbl,#b_blk{last=Last}, Blocks, Args, Defs) ->
     case Last of
         #b_ret{} -> [{true,Lbl}];
-        #b_br{succ=D,fail=D} ->
-            analyze_bb(D, Blocks, Args, Defs);
+        #b_br{succ=D,fail=D} -> [{true,Lbl}];
         #b_br{bool=Guard,succ=S,fail=F} ->
             analyze_guarded_bb(Lbl, analyze_bool(Guard, Args, Defs), S,  F,
                                Blocks, Args, Defs);
