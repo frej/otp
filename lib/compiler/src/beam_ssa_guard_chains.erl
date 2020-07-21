@@ -59,7 +59,12 @@ function(F=#b_function{bs=Bs,args=Args,anno=Anno}, _Opts) ->
         [{true,_}|_] -> ok;
         [] -> ok
     end,
-    {F,{MFA,R}}.
+    case only_tag_tests(R) of
+        true ->
+            {F,{MFA,R}};
+        false ->
+            {F,{MFA,[]}}
+    end.
 
 %%%
 %%% Figure out if the result if this function is simply one of its
@@ -210,3 +215,64 @@ analyze_bool(B, Args, Defs) ->
             false
     end.
 
+%%%
+%%% Check if the tests in the list of guards all use the same argument
+%%% and are tag tests. As the future optimization is only useful for
+%%% sequences of at least two tag tests and a fallthrough, we consider
+%%% shorter sequences as not valid.
+%%%
+only_tag_tests(Gs=[{{Arg,_},_},_,_|_]) ->
+    only_tag_tests(Arg, Gs);
+only_tag_tests(_) ->
+    false.
+
+only_tag_tests(_, [{true,_}]) ->
+    true;
+only_tag_tests(Arg, [{{Arg,is_nonempty_list},_}|Rest]) ->
+    only_tag_tests(Arg, Rest);
+only_tag_tests(Arg, [{{Arg,{bif,'=:=',{b_literal,[]}}},_}|Rest]) ->
+    only_tag_tests(Arg, Rest);
+only_tag_tests(Arg, [{{Arg,{bif,is_atom}},_}|Rest]) ->
+    only_tag_tests(Arg, Rest);
+only_tag_tests(Arg, [{{Arg,{bif,is_bitstring}},_}|Rest]) ->
+    only_tag_tests(Arg, Rest);
+only_tag_tests(Arg, [{{Arg,{bif,is_binary}},_}|Rest]) ->
+    only_tag_tests(Arg, Rest);
+only_tag_tests(Arg, [{{Arg,{bif,is_float}},_}|Rest]) ->
+    only_tag_tests(Arg, Rest);
+only_tag_tests(Arg, [{{Arg,{bif,is_function,{b_literal,_}}},_}|Rest]) ->
+    only_tag_tests(Arg, Rest);
+only_tag_tests(Arg, [{{Arg,{bif,is_function}},_}|Rest]) ->
+    only_tag_tests(Arg, Rest);
+only_tag_tests(Arg, [{{Arg,{bif,is_integer}},_}|Rest]) ->
+    only_tag_tests(Arg, Rest);
+only_tag_tests(Arg, [{{Arg,{bif,is_list}},_}|Rest]) ->
+    only_tag_tests(Arg, Rest);
+only_tag_tests(Arg, [{{Arg,{bif,is_map}},_}|Rest]) ->
+    only_tag_tests(Arg, Rest);
+only_tag_tests(Arg, [{{Arg,{bif,is_number}},_}|Rest]) ->
+    only_tag_tests(Arg, Rest);
+only_tag_tests(Arg, [{{Arg,{bif,is_pid}},_}|Rest]) ->
+    only_tag_tests(Arg, Rest);
+only_tag_tests(Arg, [{{Arg,{bif,is_port}},_}|Rest]) ->
+    only_tag_tests(Arg, Rest);
+only_tag_tests(Arg, [{{Arg,{bif,is_reference}},_}|Rest]) ->
+    only_tag_tests(Arg, Rest);
+only_tag_tests(Arg, [{{Arg,{bif,is_tuple}},_}|Rest]) ->
+    only_tag_tests(Arg, Rest);
+
+%%
+only_tag_tests(Arg, [{{Arg,{bif,'=:=',{b_literal,_}}},_}|_]) ->
+    false;
+only_tag_tests(Arg, [{{Arg,{is_tagged_tuple,_,_}},_}|_]) ->
+    false;
+only_tag_tests(Arg, [{{Arg,{bif,O,_}},_}|_])
+  when O =:= '>=' ; O =:= '=<' ; O =:= '==' ; O =:= '=:=' ;
+       O == '<' ; O =:= '>' ->
+    false;
+
+only_tag_tests(Arg, [{{Other,_},_}|_]) when Arg =/= Other ->
+    false;
+only_tag_tests(_Arg, Guards) ->
+    io:format("!!~p~n", [Guards]),
+    false.
