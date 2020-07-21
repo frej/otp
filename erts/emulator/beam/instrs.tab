@@ -1176,3 +1176,7 @@ raw_raise() {
         x(0) = am_badarg;
     }
 }
+
+
+gchain(Order, Idx) {
+}

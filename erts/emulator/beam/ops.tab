@@ -1748,3 +1748,7 @@ move n D=y => init D
 move_x1 c
 move_x2 c
 
+#
+# OTP 23+
+#
+gchain t t

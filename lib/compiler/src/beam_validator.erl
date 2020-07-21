@@ -1042,6 +1042,15 @@ vi({bs_put_utf32,{f,Fail},_,Src}, Vst) ->
                    update_type(fun meet/2, #t_integer{}, Src, SuccVst)
            end);
 
+%% Profiling markers
+vi({gchain,Order,Idx}, Vst) ->
+    if is_integer(Order) -> true;
+       true -> error({integer_required,Order})
+    end,
+    if is_integer(Idx) -> true;
+       true -> error({integer_required,Idx})
+    end,
+    Vst;
 vi(_, _) ->
     error(unknown_instruction).
 

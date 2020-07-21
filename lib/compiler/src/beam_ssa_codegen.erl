@@ -392,6 +392,7 @@ classify_heap_need(match_fail) -> gc;
 classify_heap_need(nop) -> neutral;
 classify_heap_need(new_try_tag) -> gc;
 classify_heap_need(peek_message) -> gc;
+classify_heap_need(gchain) -> neutral;
 classify_heap_need(put_map) -> gc;
 classify_heap_need(put_tuple_elements) -> neutral;
 classify_heap_need(raw_raise) -> gc;
@@ -1698,7 +1699,9 @@ cg_instr(remove_message, [], _Dst) ->
 cg_instr(resume, [A,B], _Dst) ->
     [{bif,raise,{f,0},[A,B],{x,0}}];
 cg_instr(timeout, [], _Dst) ->
-    [timeout].
+    [timeout];
+cg_instr(gchain, [{integer,Order},{integer,Idx}], _Dst) ->
+    [{gchain,Order,Idx}].
 
 cg_test(bs_add=Op, Fail, [Src1,Src2,{integer,Unit}], Dst, _I) ->
     [{Op,Fail,[Src1,Src2,Unit],Dst}];
