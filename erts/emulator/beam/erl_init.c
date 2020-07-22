@@ -62,6 +62,8 @@
 #  include <sys/resource.h>
 #endif
 
+#include "gchain.h"
+
 #define ERTS_DEFAULT_NO_ASYNC_THREADS	1
 
 #define ERTS_DEFAULT_SCHED_STACK_SIZE   128
@@ -294,6 +296,7 @@ void erl_error(char *fmt, va_list args)
 }
 
 static int early_init(int *argc, char **argv);
+static void gchain_init(void);
 
 static void
 erl_init(int ncpu,
@@ -328,6 +331,8 @@ erl_init(int ncpu,
     H_MIN_SIZE      = erts_next_heap_size(H_MIN_SIZE, 0);
     BIN_VH_MIN_SIZE = erts_next_heap_size(BIN_VH_MIN_SIZE, 0);
 
+
+    gchain_init();
     erts_init_trace();
     erts_init_bits();
     erts_code_ix_init();
@@ -2493,4 +2498,12 @@ __decl_noreturn void __noreturn erts_flush_async_exit(int n, char *fmt, ...)
     erts_exit_vv(n, 1, fmt, args1, args2);
     va_end(args2);
     va_end(args1);
+}
+
+erts_atomic64_t gchain_counts[GCHAIN_MAX_ORDER][GCHAIN_MAX_IDX];
+static void gchain_init(void)
+{
+    for (unsigned o = 0; o < GCHAIN_MAX_ORDER; o++)
+        for (unsigned i = 0; i < GCHAIN_MAX_IDX; i++)
+            erts_atomic64_init_nob(&gchain_counts[o][i], 0);
 }

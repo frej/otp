@@ -1179,4 +1179,8 @@ raw_raise() {
 
 
 gchain(Order, Idx) {
+    unsigned o = $Order >= GCHAIN_MAX_ORDER ? GCHAIN_MAX_ORDER : $Order;
+    unsigned i = $Idx >= GCHAIN_MAX_IDX ? GCHAIN_MAX_IDX : $Idx;
+
+    erts_atomic64_inc_nob(&gchain_counts[o][i]);
 }

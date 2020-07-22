@@ -48,6 +48,8 @@
 #include "erl_msacc.h"
 #include "erl_proc_sig_queue.h"
 
+#include "gchain.h"
+
 Export *erts_await_result;
 static Export await_exit_trap;
 static Export* flush_monitor_messages_trap = NULL;
@@ -5584,4 +5586,35 @@ BIF_RETTYPE dt_restore_tag_1(BIF_ALIST_1)
     }
 #endif
     BIF_RET(am_true);
+}
+
+BIF_RETTYPE gchain_dump_0(BIF_ALIST_0)
+{
+    uint64_t d[GCHAIN_MAX_ORDER][GCHAIN_MAX_IDX];
+    uint64_t total = 0;
+
+    for (unsigned o = 0; o < GCHAIN_MAX_ORDER; o++)
+        for (unsigned i = 0; i < GCHAIN_MAX_IDX; i++) {
+            d[o][i] = erts_atomic64_xchg_nob(&gchain_counts[o][i], 0);
+            total += d[o][i];
+        }
+    fprintf(stderr, "   ");
+    for (unsigned i = 0; i < GCHAIN_MAX_IDX; i++)
+        fprintf(stderr, "         %2d        ", i);
+    fprintf(stderr, "\n\r");
+    for (unsigned o = 0; o < GCHAIN_MAX_ORDER; o++) {
+        uint64_t order_sum = 0;
+
+        fprintf(stderr, "%2d:", o);
+        for (unsigned i = 0; i < GCHAIN_MAX_IDX; i++) {
+            uint64_t n = d[o][i];
+
+            order_sum += n;
+            fprintf(stderr, " %10ld (%5.01f)",
+                    n, 100.0 * n / (double)total);
+        }
+        fprintf(stderr, " %5.01f\n\r", 100.0 * order_sum/ (double)total);
+    }
+    fprintf(stderr, "Total: %ld\n\r", total);
+    BIF_RET(am_ok);
 }

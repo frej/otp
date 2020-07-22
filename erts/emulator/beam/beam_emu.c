@@ -46,6 +46,8 @@
 #include "dtrace-wrapper.h"
 #include "erl_proc_sig_queue.h"
 
+#include "gchain.h"
+
 /* #define HARDDEBUG 1 */
 
 #if defined(NO_JUMP_TABLE)
