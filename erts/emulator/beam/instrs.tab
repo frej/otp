@@ -1202,3 +1202,18 @@ i_select_tag2(Dst0, Dst1, Fail, Arg, Table) {
     case 2: $JUMP(fail);
     }
 }
+
+i_select_tag2_ln(Dst0, Dst1, Fail, Arg) {
+    Eterm fail = $Fail;
+    Eterm l0 = $Dst0;
+    Eterm l1 = $Dst1;
+    Eterm arg = $Arg;
+
+    if (is_list(arg)) {
+        $JUMP(l0);
+    } else if (is_nil(arg)) {
+        $JUMP(l1);
+    } else {
+        $JUMP(fail);
+    }
+}

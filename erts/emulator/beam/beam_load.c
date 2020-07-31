@@ -2640,12 +2640,19 @@ load_code(LoaderState* stp)
             Eterm lf = code[ci - 6 + 3];
             Eterm arg = code[ci - 6 + 1]>>BEAM_WIDE_SHIFT;
 
-            erts_printf("GNURK t0:%T t1:%T l0:%p l1:%p lf:%p arg:x(%d)\n\r",
+            if (t0 == am_is_nonempty_list && t1 == am_is_nil) {
+                erts_printf("NL t0:%T t1:%T l0:%p l1:%p lf:%p arg:x(%d)\n\r",
+                            t0, t1, (void*)l0, (void*)l1, (void*)lf, arg);
+                code[ci - 6 + 0] = BeamOpCodeAddr(op_i_select_tag2_ln_fffx);
+                ci -= 2;
+            } else {
+                erts_printf("GNURK t0:%T t1:%T l0:%p l1:%p lf:%p arg:x(%d)\n\r",
                         t0, t1, (void*)l0, (void*)l1, (void*)lf, arg);
-            code[ci - 6 + 0] = BeamOpCodeAddr(op_i_select_tag2_fffxW);
-            if (build_select_tag_lookup_table(t0, t1, &code[ci - 6 + 4]))
-                LoadError0(stp, "Unhandled tag test in select_tag2");
-            ci -= 1;
+                code[ci - 6 + 0] = BeamOpCodeAddr(op_i_select_tag2_fffxW);
+                if (build_select_tag_lookup_table(t0, t1, &code[ci - 6 + 4]))
+                    LoadError0(stp, "Unhandled tag test in select_tag2");
+                ci -= 1;
+            }
             break;
         }
 	}
