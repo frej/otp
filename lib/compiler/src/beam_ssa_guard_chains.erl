@@ -52,17 +52,18 @@ module(#b_module{body=Fs0,attributes=As}=Module, Opts) ->
     Fs = [ F || {F,_} <- Info],
     {ok,Module#b_module{body=Fs,attributes=[{guard_chains,Guards}|As]}}.
 
-function(F=#b_function{bs=Bs,args=Args,anno=Anno}, _Opts) ->
+function(F=#b_function{bs=Bs0,args=Args,anno=Anno,cnt=Cnt0}, _Opts) ->
     MFA = maps:get(func_info, Anno),
-    R = analyze_head(Bs, Args),
+    R = analyze_head(Bs0, Args),
     case lists:reverse(R) of % Check that the format is what we expect
         [{true,_}|_] -> ok;
         [] -> ok
     end,
-    case only_tag_tests(R) of
-        true ->
-            {F,{MFA,R}};
-        false ->
+    case {only_tag_tests(R), length(R) - 1} of
+        {true, Len} when Len =:= 2 ->
+            {Bs, Cnt} = insert_select_tag(R, Bs0, Cnt0),
+            {F#b_function{bs=Bs,cnt=Cnt},{MFA,R}};
+        _ ->
             {F,{MFA,[]}}
     end.
 
@@ -137,9 +138,9 @@ analyze_guarded_bb(Lbl, false, _, _, _, _, _)->
     %% We cannot statically determine the result of the guard, so give
     %% up.
     [{true,Lbl}];
-analyze_guarded_bb(_, Condition, GuardedBlock,
+analyze_guarded_bb(Lbl, Condition, GuardedBlock,
                    FallthroughBlock, Blocks, Args, Defs) ->
-    [{Condition,GuardedBlock}|analyze_bb(FallthroughBlock, Blocks, Args, Defs)].
+    [{Lbl,Condition,GuardedBlock}|analyze_bb(FallthroughBlock, Blocks, Args, Defs)].
 
 analyze_bb(Lbl, Blocks, Args, Defs) ->
     Block = maps:get(Lbl, Blocks),
@@ -174,36 +175,15 @@ has_side_effects1([I|Is]) ->
 %%% simple operation on one or more of the function arguments.
 analyze_bool(B, Args, Defs) ->
     case Defs of
-        #{ B := #b_set{op=is_nonempty_list,args=[Var]} } ->
-            case Args of
-                #{ Var := Idx } ->
-                    {Idx, is_nonempty_list};
-                _ ->
-                    false
-            end;
-        #{ B := #b_set{op={bif,Bif},args=[Var]} } ->
-            case Args of
-                #{ Var := Idx } ->
-                    {Idx, {bif, Bif}};
-                _ ->
-                    false
-            end;
-        #{ B := #b_set{op={bif,Bif},args=[Var,V=#b_literal{}]} } ->
-            case Args of
-                #{ Var := Idx } ->
-                    {Idx, {bif, Bif, V}};
-                _ ->
-                    false
-            end;
-        #{ B := #b_set{op=is_tagged_tuple,
-                       args=[Var,#b_literal{val=A},#b_literal{val=T}]}
-         } when is_integer(A), is_atom(T) ->
-            case Args of
-                #{ Var := Idx } ->
-                    {Idx, {is_tagged_tuple,A,T}};
-                _ ->
-                    false
-            end;
+        #{ B := #b_set{op=is_nonempty_list,args=[Var]} }
+          when is_map_key(Var, Args) ->
+            {Var, is_nonempty_list};
+        #{ B := #b_set{op={bif,Bif},args=[Var]} }
+          when is_map_key(Var, Args) ->
+            {Var, Bif};
+        #{ B := #b_set{op={bif,'=:='},args=[Var,#b_literal{val=[]}]} }
+          when is_map_key(Var, Args) ->
+            {Var, is_nil};
         _ ->
             false
     end.
@@ -214,58 +194,96 @@ analyze_bool(B, Args, Defs) ->
 %%% sequences of at least two tag tests and a fallthrough, we consider
 %%% shorter sequences as not valid.
 %%%
-only_tag_tests(Gs=[{{Arg,_},_},_,_|_]) ->
+only_tag_tests(Gs=[{_,{Arg,_},_},_,_|_]) ->
     only_tag_tests(Arg, Gs);
 only_tag_tests(_) ->
     false.
 
 only_tag_tests(_, [{true,_}]) ->
     true;
-only_tag_tests(Arg, [{{Arg,is_nonempty_list},_}|Rest]) ->
+only_tag_tests(Arg, [{_,{Arg,is_nonempty_list},_}|Rest]) ->
     only_tag_tests(Arg, Rest);
-only_tag_tests(Arg, [{{Arg,{bif,'=:=',{b_literal,[]}}},_}|Rest]) ->
+only_tag_tests(Arg, [{_,{Arg,is_atom},_}|Rest]) ->
     only_tag_tests(Arg, Rest);
-only_tag_tests(Arg, [{{Arg,{bif,is_atom}},_}|Rest]) ->
+only_tag_tests(Arg, [{_,{Arg,is_bitstring},_}|Rest]) ->
     only_tag_tests(Arg, Rest);
-only_tag_tests(Arg, [{{Arg,{bif,is_bitstring}},_}|Rest]) ->
+only_tag_tests(Arg, [{_,{Arg,is_float},_}|Rest]) ->
     only_tag_tests(Arg, Rest);
-only_tag_tests(Arg, [{{Arg,{bif,is_binary}},_}|Rest]) ->
+only_tag_tests(Arg, [{_,{Arg,is_function,#b_literal{}},_}|Rest]) ->
     only_tag_tests(Arg, Rest);
-only_tag_tests(Arg, [{{Arg,{bif,is_float}},_}|Rest]) ->
+only_tag_tests(Arg, [{_,{Arg,is_function},_}|Rest]) ->
     only_tag_tests(Arg, Rest);
-only_tag_tests(Arg, [{{Arg,{bif,is_function,{b_literal,_}}},_}|Rest]) ->
+only_tag_tests(Arg, [{_,{Arg,is_integer},_}|Rest]) ->
     only_tag_tests(Arg, Rest);
-only_tag_tests(Arg, [{{Arg,{bif,is_function}},_}|Rest]) ->
+only_tag_tests(Arg, [{_,{Arg,is_list},_}|Rest]) ->
     only_tag_tests(Arg, Rest);
-only_tag_tests(Arg, [{{Arg,{bif,is_integer}},_}|Rest]) ->
+only_tag_tests(Arg, [{_,{Arg,is_map},_}|Rest]) ->
     only_tag_tests(Arg, Rest);
-only_tag_tests(Arg, [{{Arg,{bif,is_list}},_}|Rest]) ->
+only_tag_tests(Arg, [{_,{Arg,is_nil},_}|Rest]) ->
     only_tag_tests(Arg, Rest);
-only_tag_tests(Arg, [{{Arg,{bif,is_map}},_}|Rest]) ->
+only_tag_tests(Arg, [{_,{Arg,is_number},_}|Rest]) ->
     only_tag_tests(Arg, Rest);
-only_tag_tests(Arg, [{{Arg,{bif,is_number}},_}|Rest]) ->
+only_tag_tests(Arg, [{_,{Arg,is_pid},_}|Rest]) ->
     only_tag_tests(Arg, Rest);
-only_tag_tests(Arg, [{{Arg,{bif,is_pid}},_}|Rest]) ->
+only_tag_tests(Arg, [{_,{Arg,is_port},_}|Rest]) ->
     only_tag_tests(Arg, Rest);
-only_tag_tests(Arg, [{{Arg,{bif,is_port}},_}|Rest]) ->
+only_tag_tests(Arg, [{_,{Arg,is_reference},_}|Rest]) ->
     only_tag_tests(Arg, Rest);
-only_tag_tests(Arg, [{{Arg,{bif,is_reference}},_}|Rest]) ->
-    only_tag_tests(Arg, Rest);
-only_tag_tests(Arg, [{{Arg,{bif,is_tuple}},_}|Rest]) ->
+only_tag_tests(Arg, [{_,{Arg,is_tuple},_}|Rest]) ->
     only_tag_tests(Arg, Rest);
 
 %%
-only_tag_tests(Arg, [{{Arg,{bif,'=:=',{b_literal,_}}},_}|_]) ->
+only_tag_tests(Arg, [{_,{Arg,{is_tagged_tuple,_,_}},_}|_]) ->
     false;
-only_tag_tests(Arg, [{{Arg,{is_tagged_tuple,_,_}},_}|_]) ->
+%% only_tag_tests(Arg, [{_,{Arg,{bif,O,_}},_}|_])
+%%   when O =:= '>=' ; O =:= '=<' ; O =:= '==' ; O =:= '=:=' ;
+%%        O == '<' ; O =:= '>' ->
+%%     false;
+only_tag_tests(Arg, [{_,{Arg,is_binary},_}|_Rest]) ->
     false;
-only_tag_tests(Arg, [{{Arg,{bif,O,_}},_}|_])
-  when O =:= '>=' ; O =:= '=<' ; O =:= '==' ; O =:= '=:=' ;
-       O == '<' ; O =:= '>' ->
+only_tag_tests(Arg, [{_,{Other,_},_}|_]) when Arg =/= Other ->
     false;
-
-only_tag_tests(Arg, [{{Other,_},_}|_]) when Arg =/= Other ->
-    false;
-only_tag_tests(_Arg, Guards) ->
-    io:format("!!~p~n", [Guards]),
+only_tag_tests(_Arg, _Guards) ->
+    io:format("!!! arg:~p, ~p~n", [_Arg, _Guards]),
     false.
+
+insert_select_tag([{Parent,{Var=#b_var{},TagTest0},Lbl0},
+                   {_,{Var,TagTest1},Lbl1},
+                   {true,FailLbl}], Bs0, Cnt0) ->
+    %% Replace the chain of branches with a switch using a magic operand
+    Blk0 = #b_blk{is=Is0} = maps:get(Parent, Bs0),
+    SwitchArg = #b_var{name={magic_switch_arg,Cnt0}},
+    Is = Is0 ++ [#b_set{op=tag_select,dst=SwitchArg,
+                        args=[#b_literal{val=TagTest0},
+                              #b_literal{val=TagTest1},Var]}],
+    Last=#b_switch{arg=SwitchArg,fail=FailLbl,
+                   list=[{#b_literal{val=0},Lbl0},
+                         {#b_literal{val=1},Lbl1}]},
+    Blk = Blk0#b_blk{is=Is,last=Last},
+    Bs1 = Bs0#{ Parent => Blk },
+    Bs2 = maps:from_list(beam_ssa_dead:opt(beam_ssa:linearize(Bs1))),
+    %% beam_ssa_dead:opt/1 does not remove dead defs unless they are
+    %% in one of the blocks which are touched by the optimization. So
+    %% do that manually here.
+    {drop_dead_defs(Bs2),Cnt0 + 1}.
+
+drop_dead_defs(Blocks0) ->
+    Uses = beam_ssa:uses(Blocks0),
+    Defs = beam_ssa:definitions(Blocks0),
+    ToDrop = maps:fold(fun(Var, Def, Acc) when not is_map_key(Var, Uses) ->
+                               case beam_ssa:no_side_effect(Def) of
+                                   true ->
+                                       cerl_sets:add_element(Def, Acc);
+                                   false ->
+                                       Acc
+                               end;
+                          (_, _, Acc) ->
+                               Acc
+                       end, cerl_sets:new(), Defs),
+    maps:fold(fun(Lbl, Blk, Acc) -> Acc#{ Lbl => drop_defs(Blk, ToDrop) } end,
+              #{}, Blocks0).
+
+drop_defs(Blk=#b_blk{is=Is}, ToDrop) ->
+    Blk#b_blk{is=lists:filter(fun(I) ->
+                                      not cerl_sets:is_element(I, ToDrop)
+                              end, Is)}.

@@ -400,6 +400,7 @@ classify_heap_need(remove_message) -> neutral;
 classify_heap_need(resume) -> gc;
 classify_heap_need(set_tuple_element) -> gc;
 classify_heap_need(succeeded) -> neutral;
+classify_heap_need(tag_select) -> neutral;
 classify_heap_need(timeout) -> gc;
 classify_heap_need(wait) -> gc;
 classify_heap_need(wait_timeout) -> gc.
@@ -990,6 +991,10 @@ cg_switch(Is0, Last, St0) ->
                           ({f,_}=F) -> F
                        end, List1),
             Is = reverse(More, [{select_tuple_arity,Tuple,Fail,{list,List}}]),
+            {Is,St};
+        [{tag_select,T0,T1,Arg,Src}|More] ->
+            [{integer,0},T0L,{integer,1},T1L] = List1,
+            Is = reverse(More, [{select_tag2,T0L,T1L,Fail,Arg,T0,T1}]),
             {Is,St};
         _ ->
             SelectVal = {select_val,Src,Fail,{list,List1}},
@@ -1697,6 +1702,8 @@ cg_instr(remove_message, [], _Dst) ->
     [remove_message];
 cg_instr(resume, [A,B], _Dst) ->
     [{bif,raise,{f,0},[A,B],{x,0}}];
+cg_instr(tag_select, [Tag0,Tag1,Src], Dst) ->
+    [{tag_select,Tag0,Tag1,Src,Dst}];
 cg_instr(timeout, [], _Dst) ->
     [timeout].
 
