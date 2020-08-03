@@ -1,0 +1,51 @@
+/*
+ * %CopyrightBegin%
+ *
+ * Copyright Ericsson AB 2000-2018. All Rights Reserved.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ *
+ * %CopyrightEnd%
+ */
+
+#ifndef __BEAM_SELECT_TAG_H
+#define __BEAM_SELECT_TAG_H
+
+extern uint8_t select_tag_table[1 << _TAG_IMMED2_SIZE]; /* in beam_emu.c */
+extern uint8_t select_tag_table_header[1 << 4]; /* in beam_emu.c */
+
+typedef enum {
+    BEAM_ST_HEADER = 0,
+    BEAM_ST_LIST,
+    BEAM_ST_BOXED,
+    BEAM_ST_PID,
+    BEAM_ST_PORT,
+    BEAM_ST_SMALL,
+    BEAM_ST_ATOM,
+    BEAM_ST_CATCH,
+    BEAM_ST_NIL,
+
+    BEAM_STH_TUPLE = 16,
+    BEAM_STH_FUN,
+    BEAM_STH_BIG,
+    BEAM_STH_FLOAT,
+    BEAM_STH_REF,
+    BEAM_STH_BIN,
+    BEAM_STH_PID,
+    BEAM_STH_PORT,
+    BEAM_STH_MAP,
+    BEAM_STH_OTHER,
+    BEAM_ST_LAST
+} beam_select_tag_type_t;
+
+#endif	/* __BEAM_SELECT_TAG_H */

@@ -244,6 +244,9 @@ static Eterm compilation_info_for_module(Process* p, BeamCodeHeader*);
 static Eterm md5_of_module(Process* p, BeamCodeHeader*);
 static Eterm has_native(BeamCodeHeader*);
 static Eterm native_addresses(Process* p, BeamCodeHeader*);
+extern uint8_t select_tag_table[1 << _TAG_IMMED2_SIZE];
+static void init_select_tag_table(void);
+static int build_select_tag_lookup_table(Eterm t0, Eterm t1, uint64_t *table);
 
 static int must_swap_floats;
 
@@ -262,6 +265,7 @@ void init_load(void)
     must_swap_floats = (f.fw[0] == 0);
 
     erts_init_ranges();
+    init_select_tag_table();
 }
 
 static void
@@ -2626,6 +2630,24 @@ load_code(LoaderState* stp)
 	    stp->specific_op = -1;
 	    retval = 1;
 	    goto cleanup;
+
+        case op_select_tag2_fffxaa: {
+            /* This is ugly */
+            Eterm t0 = code[ci - 6 + 4];
+            Eterm t1 = code[ci - 6 + 5];
+            Eterm l0 = ((Sint)(Sint32)(code[ci - 6 + 1]&BEAM_WIDE_MASK));
+            Eterm l1 = code[ci - 6 + 2];
+            Eterm lf = code[ci - 6 + 3];
+            Eterm arg = code[ci - 6 + 1]>>BEAM_WIDE_SHIFT;
+
+            erts_printf("GNURK t0:%T t1:%T l0:%p l1:%p lf:%p arg:x(%d)\n\r",
+                        t0, t1, (void*)l0, (void*)l1, (void*)lf, arg);
+            code[ci - 6 + 0] = BeamOpCodeAddr(op_i_select_tag2_fffxW);
+            if (build_select_tag_lookup_table(t0, t1, &code[ci - 6 + 4]))
+                LoadError0(stp, "Unhandled tag test in select_tag2");
+            ci -= 1;
+            break;
+        }
 	}
 
 	/*
@@ -4659,3 +4681,149 @@ void dbg_vtrace_mfa(unsigned ix, const char* format, ...)
 }
 
 #endif /* ENABLE_DBG_TRACE_MFA */
+
+static void init_select_tag_table(void)
+{
+#define GET_PRIMARY_TAG(x) ((x) & _TAG_PRIMARY_MASK)
+#define GET_IMMED1_TAG(x) ((x) & _TAG_IMMED1_MASK)
+#define GET_IMMED2_TAG(x) ((x) & _TAG_IMMED2_MASK)
+#define GET_HEADER_TAG(x) ((x) & _TAG_HEADER_MASK)
+
+    ASSERT(BEAM_STH_LAST < 32);
+
+    for(unsigned i = 0; i < (1 << _TAG_IMMED2_SIZE); i++) {
+        if (GET_PRIMARY_TAG(i) == TAG_PRIMARY_HEADER)
+            select_tag_table[i] = BEAM_ST_HEADER;
+        else if (GET_PRIMARY_TAG(i) == TAG_PRIMARY_LIST)
+            select_tag_table[i] = BEAM_ST_LIST;
+        else if (GET_PRIMARY_TAG(i) == TAG_PRIMARY_BOXED)
+            select_tag_table[i] = BEAM_ST_BOXED;
+        else if (GET_IMMED1_TAG(i) == _TAG_IMMED1_PID)
+            select_tag_table[i] = BEAM_ST_PID;
+        else if (GET_IMMED1_TAG(i) == _TAG_IMMED1_PORT)
+            select_tag_table[i] = BEAM_ST_PORT;
+        else if (GET_IMMED1_TAG(i) == _TAG_IMMED1_SMALL)
+            select_tag_table[i] = BEAM_ST_SMALL;
+        else if (GET_IMMED2_TAG(i) == _TAG_IMMED2_ATOM)
+            select_tag_table[i] = BEAM_ST_ATOM;
+        else if (GET_IMMED2_TAG(i) == _TAG_IMMED2_CATCH)
+            select_tag_table[i] = BEAM_ST_CATCH;
+        else if (GET_IMMED2_TAG(i) == _TAG_IMMED2_NIL)
+            select_tag_table[i] = BEAM_ST_NIL;
+        else {
+            ASSERT(0);
+        }
+    }
+
+    for(unsigned i = 0; i < (1 << 4); i++) {
+        unsigned t = i << _TAG_PRIMARY_SIZE;
+
+        if (GET_HEADER_TAG(t) == _TAG_HEADER_ARITYVAL)
+            select_tag_table_header[i] = BEAM_STH_TUPLE;
+        else if (GET_HEADER_TAG(t) == _TAG_HEADER_FUN)
+            select_tag_table_header[i] = BEAM_STH_FUN;
+        else if (GET_HEADER_TAG(t) == _TAG_HEADER_POS_BIG)
+            select_tag_table_header[i] = BEAM_STH_BIG;
+        else if (GET_HEADER_TAG(t) == _TAG_HEADER_NEG_BIG)
+            select_tag_table_header[i] = BEAM_STH_BIG;
+        else if (GET_HEADER_TAG(t) == _TAG_HEADER_FLOAT)
+            select_tag_table_header[i] = BEAM_STH_FLOAT;
+        else if (GET_HEADER_TAG(t) == _TAG_HEADER_EXPORT)
+            select_tag_table_header[i] = BEAM_STH_OTHER;
+        else if (GET_HEADER_TAG(t) == _TAG_HEADER_REF)
+            select_tag_table_header[i] = BEAM_STH_REF;
+        else if (GET_HEADER_TAG(t) == _TAG_HEADER_REFC_BIN)
+            select_tag_table_header[i] = BEAM_STH_BIN;
+        else if (GET_HEADER_TAG(t) == _TAG_HEADER_HEAP_BIN)
+            select_tag_table_header[i] = BEAM_STH_BIN;
+        else if (GET_HEADER_TAG(t) == _TAG_HEADER_SUB_BIN)
+            select_tag_table_header[i] = BEAM_STH_BIN;
+        else if (GET_HEADER_TAG(t) == _TAG_HEADER_EXTERNAL_PID)
+            select_tag_table_header[i] = BEAM_STH_PID;
+        else if (GET_HEADER_TAG(t) == _TAG_HEADER_EXTERNAL_PORT)
+            select_tag_table_header[i] = BEAM_STH_PORT;
+        else if (GET_HEADER_TAG(t) == _TAG_HEADER_EXTERNAL_REF)
+            select_tag_table_header[i] = BEAM_STH_REF;
+        else if (GET_HEADER_TAG(t) == _TAG_HEADER_BIN_MATCHSTATE)
+            select_tag_table_header[i] = BEAM_STH_OTHER;
+        else if (GET_HEADER_TAG(t) == _TAG_HEADER_MAP)
+            select_tag_table_header[i] = BEAM_STH_MAP;
+    }
+
+    /* fprintf(stderr, "tags:\n\r"); */
+    /* for(unsigned i = 0; i < (1 << _TAG_IMMED2_SIZE); i++) */
+    /*     fprintf(stderr, "%02x: %d\n", i, select_tag_table[i]); */
+    /* fprintf(stderr, "header tags:\n\r"); */
+    /* for(unsigned i = 0; i < (1 << 4); i++) */
+    /*     fprintf(stderr, "%01x: %d\n", i, select_tag_table_header[i]); */
+
+#undef GET_PRIMARY_TAG
+#undef GET_IMMED1_TAG
+#undef GET_IMMED2_TAG
+#undef GET_HEADER_TAG
+}
+
+
+#define SET_DEST(table, type, dest)                      \
+    (table) = (~((uint64_t)0x3 << ((uint64_t)(type) << 1)) & (table)) | (uint64_t)(dest) << ((type) << 1)
+
+static int add_select_tag_test(Eterm test, int dest, uint64_t *table)
+{
+    switch (test) {
+    case am_is_atom:
+        SET_DEST(*table, BEAM_ST_ATOM, dest);
+        break;
+    case am_is_list:
+        SET_DEST(*table, BEAM_ST_LIST, dest);
+        SET_DEST(*table, BEAM_ST_NIL, dest);
+        break;
+    case am_is_bitstr:
+        SET_DEST(*table, BEAM_STH_BIN, dest);
+        break;
+    case am_is_float:
+        SET_DEST(*table, BEAM_STH_FLOAT, dest);
+        break;
+    case am_is_tuple:
+        SET_DEST(*table, BEAM_STH_TUPLE, dest);
+        break;
+    case am_is_integer:
+        SET_DEST(*table, BEAM_ST_SMALL, dest);
+        SET_DEST(*table, BEAM_STH_BIG, dest);
+        break;
+    case am_is_nil:
+        SET_DEST(*table, BEAM_ST_NIL, dest);
+        break;
+    case am_is_nonempty_list:
+        SET_DEST(*table, BEAM_ST_LIST, dest);
+        break;
+    case am_is_number:
+        SET_DEST(*table, BEAM_STH_FLOAT, dest);
+        SET_DEST(*table, BEAM_ST_SMALL, dest);
+        SET_DEST(*table, BEAM_STH_BIG, dest);
+        break;
+    case am_is_map:
+        SET_DEST(*table, BEAM_STH_MAP, dest);
+        break;
+    case am_is_boolean:
+    case am_is_binary:
+    default:
+        erts_printf("unknown test: %T\n", test);
+        return 1;
+    }
+    return 0;
+}
+
+static int build_select_tag_lookup_table(Eterm t0, Eterm t1,
+                                              uint64_t *table)
+{
+    /* The low 32 bits store what to do for unboxed types, the high bits are for
+       boxed types, two bits per type */
+
+    for (unsigned i = 0; i < BEAM_ST_LAST; i++)
+        SET_DEST(*table, i, 2); /* Fill in the default */
+    if (add_select_tag_test(t0, 0, table))
+        return 1;
+    if (add_select_tag_test(t1, 1, table))
+        return 1;
+    return 0;
+}
