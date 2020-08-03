@@ -878,6 +878,7 @@ kernel_passes() ->
        {iff,drecv,{listing,"recv"}},
        {unless,no_recv_opt,{iff,ssalint,{pass,beam_ssa_lint}}}]},
      {unless,no_guard_chains,{pass,beam_ssa_guard_chains}},
+     {iff,dguardchains,{listing,"guardchains"}},
      {pass,beam_ssa_pre_codegen},
      {iff,dprecg,{listing,"precodegen"}},
      {iff,ssalint,{pass,beam_ssa_lint}},
