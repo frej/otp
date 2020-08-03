@@ -26,7 +26,7 @@ extern uint8_t select_tag_table_header[1 << 4]; /* in beam_emu.c */
 
 typedef enum {
     BEAM_ST_HEADER = 0,
-    BEAM_ST_LIST,
+    BEAM_ST_CONS,
     BEAM_ST_BOXED,
     BEAM_ST_PID,
     BEAM_ST_PORT,
@@ -53,6 +53,7 @@ enum beam_select_tag_type_testname {
     STTT_BITSTR,
     STTT_BIN,
     STTT_FLOAT,
+    STTT_FUNCTION,
     STTT_TUPLE,
     STTT_INT,
     STTT_NIL,
@@ -60,6 +61,7 @@ enum beam_select_tag_type_testname {
     STTT_NUMBER,
     STTT_MAP,
     STTT_BOOL,
+    STTT_PID,
     STTT_UNKNOWN,
     NOOF_STTT
 };
@@ -67,5 +69,6 @@ enum beam_select_tag_type_testname {
 extern erts_atomic64_t gchain_counts[NOOF_STTT][NOOF_STTT][3];
 
 extern void gchain_init(void);
+extern const char *gchain_test_name(enum beam_select_tag_type_testname n);
 
 #endif	/* __BEAM_SELECT_TAG_H */

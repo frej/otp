@@ -2643,8 +2643,9 @@ load_code(LoaderState* stp)
             uint16_t pt = select_tag_test_to_idx(t0)
                 | ((uint16_t)select_tag_test_to_idx(t1) << 8);
 
-            erts_printf("GNURK t0:%T t1:%T l0:%p l1:%p lf:%p arg:x(%d)\n\r",
-                        t0, t1, (void*)l0, (void*)l1, (void*)lf, arg);
+            /* erts_printf("GNURK %p t0:%T t1:%T l0:%p l1:%p lf:%p arg:x(%d)\n\r", */
+            /*             &code[ci - 6 + 0], */
+            /*             t0, t1, (void*)l0, (void*)l1, (void*)lf, arg); */
             code[ci - 6 + 0] = BeamOpCodeAddr(op_i_select_tag2_fffxWI);
             code[ci - 6 + 1] = l0;
             code[ci - 6 + 2] = l1;
@@ -4701,7 +4702,7 @@ static void init_select_tag_table(void)
         if (GET_PRIMARY_TAG(i) == TAG_PRIMARY_HEADER)
             select_tag_table[i] = BEAM_ST_HEADER;
         else if (GET_PRIMARY_TAG(i) == TAG_PRIMARY_LIST)
-            select_tag_table[i] = BEAM_ST_LIST;
+            select_tag_table[i] = BEAM_ST_CONS;
         else if (GET_PRIMARY_TAG(i) == TAG_PRIMARY_BOXED)
             select_tag_table[i] = BEAM_ST_BOXED;
         else if (GET_IMMED1_TAG(i) == _TAG_IMMED1_PID)
@@ -4735,7 +4736,7 @@ static void init_select_tag_table(void)
         else if (GET_HEADER_TAG(t) == _TAG_HEADER_FLOAT)
             select_tag_table_header[i] = BEAM_STH_FLOAT;
         else if (GET_HEADER_TAG(t) == _TAG_HEADER_EXPORT)
-            select_tag_table_header[i] = BEAM_STH_OTHER;
+            select_tag_table_header[i] = BEAM_STH_FUN;
         else if (GET_HEADER_TAG(t) == _TAG_HEADER_REF)
             select_tag_table_header[i] = BEAM_STH_REF;
         else if (GET_HEADER_TAG(t) == _TAG_HEADER_REFC_BIN)
@@ -4773,6 +4774,9 @@ static void init_select_tag_table(void)
 #define SET_DEST(table, type, dest)                      \
     (table) = (~((uint64_t)0x3 << ((uint64_t)(type) << 1)) & (table)) | (uint64_t)(dest) << ((type) << 1)
 
+#define GET_DEST(table, type)                      \
+    (((table) >> ((uint64_t)(type) << 1)) & 0x3)
+
 static int add_select_tag_test(Eterm test, int dest, uint64_t *table)
 {
     switch (test) {
@@ -4780,35 +4784,49 @@ static int add_select_tag_test(Eterm test, int dest, uint64_t *table)
         SET_DEST(*table, BEAM_ST_ATOM, dest);
         break;
     case am_is_list:
-        SET_DEST(*table, BEAM_ST_LIST, dest);
-        SET_DEST(*table, BEAM_ST_NIL, dest);
+        if (GET_DEST(*table, BEAM_ST_CONS) == 2)
+            SET_DEST(*table, BEAM_ST_CONS, dest);
+        if (GET_DEST(*table, BEAM_ST_NIL) == 2)
+            SET_DEST(*table, BEAM_ST_NIL, dest);
         break;
-    case am_is_bitstr:
+    case am_is_bitstring:
         SET_DEST(*table, BEAM_STH_BIN, dest);
         break;
     case am_is_float:
         SET_DEST(*table, BEAM_STH_FLOAT, dest);
         break;
+    case am_is_function:
+        SET_DEST(*table, BEAM_STH_FUN, dest);
+        break;
     case am_is_tuple:
         SET_DEST(*table, BEAM_STH_TUPLE, dest);
         break;
     case am_is_integer:
-        SET_DEST(*table, BEAM_ST_SMALL, dest);
-        SET_DEST(*table, BEAM_STH_BIG, dest);
+        if (GET_DEST(*table, BEAM_ST_SMALL) == 2)
+            SET_DEST(*table, BEAM_ST_SMALL, dest);
+        if (GET_DEST(*table, BEAM_STH_BIG) == 2)
+            SET_DEST(*table, BEAM_STH_BIG, dest);
         break;
     case am_is_nil:
         SET_DEST(*table, BEAM_ST_NIL, dest);
         break;
     case am_is_nonempty_list:
-        SET_DEST(*table, BEAM_ST_LIST, dest);
+        SET_DEST(*table, BEAM_ST_CONS, dest);
         break;
     case am_is_number:
-        SET_DEST(*table, BEAM_STH_FLOAT, dest);
-        SET_DEST(*table, BEAM_ST_SMALL, dest);
-        SET_DEST(*table, BEAM_STH_BIG, dest);
+        if (GET_DEST(*table, BEAM_STH_FLOAT) == 2)
+            SET_DEST(*table, BEAM_STH_FLOAT, dest);
+        if (GET_DEST(*table, BEAM_ST_SMALL) == 2)
+            SET_DEST(*table, BEAM_ST_SMALL, dest);
+        if (GET_DEST(*table, BEAM_STH_BIG) == 2)
+            SET_DEST(*table, BEAM_STH_BIG, dest);
         break;
     case am_is_map:
         SET_DEST(*table, BEAM_STH_MAP, dest);
+        break;
+    case am_is_pid:
+        SET_DEST(*table, BEAM_ST_PID, dest);
+        SET_DEST(*table, BEAM_STH_PID, dest);
         break;
     case am_is_boolean:
     case am_is_binary:
@@ -4842,12 +4860,14 @@ static uint8_t select_tag_test_to_idx(Eterm test)
         return STTT_ATOM;
     case am_is_list:
         return STTT_LIST;
-    case am_is_bitstr:
+    case am_is_bitstring:
         return STTT_BITSTR;
     case am_is_binary:
         return STTT_BIN;
     case am_is_float:
         return STTT_FLOAT;
+    case am_is_function:
+        return STTT_FUNCTION;
     case am_is_tuple:
         return STTT_TUPLE;
     case am_is_integer:
@@ -4862,8 +4882,10 @@ static uint8_t select_tag_test_to_idx(Eterm test)
         return STTT_MAP;
     case am_is_boolean:
         return STTT_BOOL;
+    case am_is_pid:
+        return STTT_PID;
     default:
-        erts_printf("unknown test: %T\n", test);
+        erts_exit(ERTS_ERROR_EXIT, "unknown test: %T\n", test);
         return STTT_UNKNOWN;
     }
     return 0;
@@ -4877,4 +4899,15 @@ void gchain_init(void)
         for(unsigned y = 0; y < NOOF_STTT; y++)
             for(unsigned z = 0; z < 3; z++)
                 erts_atomic64_init_nob(&gchain_counts[x][y][z], 0);
+}
+
+
+const char *gchain_test_name(enum beam_select_tag_type_testname n)
+{
+    static const char *idx2str[NOOF_STTT] = {
+        "atom", "list", "bitstr", "bin", "float", "fun", "tuple", "int",
+        "nil", "n-e-lst", "number", "map", "bool", "pid", "unknown"
+    };
+
+    return idx2str[n];
 }

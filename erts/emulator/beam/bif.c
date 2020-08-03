@@ -5587,11 +5587,6 @@ BIF_RETTYPE dt_restore_tag_1(BIF_ALIST_1)
     BIF_RET(am_true);
 }
 
-static const char *idx2str[NOOF_STTT] = {
-    "atom", "list", "bitstr", "bin", "float", "tuple", "int", "nil", "n-e-lst",
-    "number", "map", "bool", "unknown"
-};
-
 BIF_RETTYPE gchain_dump_0(BIF_ALIST_0)
 {
     uint64_t d[NOOF_STTT][NOOF_STTT][3];
@@ -5608,7 +5603,7 @@ BIF_RETTYPE gchain_dump_0(BIF_ALIST_0)
         for(unsigned y = 0; y < NOOF_STTT; y++)
             fprintf(stderr,
                     "%7s,%7s: %10ld (%5.01f) %10ld (%5.01f) %10ld (%5.01f)\n\r",
-                    idx2str[x],idx2str[y],
+                    gchain_test_name(x), gchain_test_name(y),
                     d[x][y][0], 100.0 * d[x][y][0] / (double)total,
                     d[x][y][1], 100.0 * d[x][y][1] / (double)total,
                     d[x][y][2], 100.0 * d[x][y][2] / (double)total);
