@@ -80,6 +80,7 @@ MODULES = \
 	file \
 	file_io_server \
 	file_server \
+	gchain \
 	gen_tcp \
 	gen_tcp_socket \
 	gen_udp \

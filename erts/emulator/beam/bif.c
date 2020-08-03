@@ -47,6 +47,7 @@
 #include "erl_map.h"
 #include "erl_msacc.h"
 #include "erl_proc_sig_queue.h"
+#include "beam_select_tag.h"
 
 Export *erts_await_result;
 static Export await_exit_trap;
@@ -5584,4 +5585,33 @@ BIF_RETTYPE dt_restore_tag_1(BIF_ALIST_1)
     }
 #endif
     BIF_RET(am_true);
+}
+
+static const char *idx2str[NOOF_STTT] = {
+    "atom", "list", "bitstr", "bin", "float", "tuple", "int", "nil", "n-e-lst",
+    "number", "map", "bool", "unknown"
+};
+
+BIF_RETTYPE gchain_dump_0(BIF_ALIST_0)
+{
+    uint64_t d[NOOF_STTT][NOOF_STTT][3];
+    uint64_t total = 0;
+
+    for(unsigned x = 0; x < NOOF_STTT; x++)
+        for(unsigned y = 0; y < NOOF_STTT; y++)
+            for(unsigned z = 0; z < 3; z++) {
+                d[x][y][z] = erts_atomic64_xchg_nob(&gchain_counts[x][y][z], 0);
+                total += d[x][y][z];
+            }
+
+    for(unsigned x = 0; x < NOOF_STTT; x++)
+        for(unsigned y = 0; y < NOOF_STTT; y++)
+            fprintf(stderr,
+                    "%7s,%7s: %10ld (%5.01f) %10ld (%5.01f) %10ld (%5.01f)\n\r",
+                    idx2str[x],idx2str[y],
+                    d[x][y][0], 100.0 * d[x][y][0] / (double)total,
+                    d[x][y][1], 100.0 * d[x][y][1] / (double)total,
+                    d[x][y][2], 100.0 * d[x][y][2] / (double)total);
+    fprintf(stderr, "Total: %ld\n\r", total);
+    BIF_RET(am_ok);
 }

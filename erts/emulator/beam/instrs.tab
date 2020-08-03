@@ -1182,10 +1182,10 @@ select_tag2(Dst0, Dst1, Fail, Arg, Tag0, Tag1) {
               "select_tag2 opcode should have been removed by loader\n");
 }
 
-i_select_tag2(Dst0, Dst1, Fail, Arg, Table) {
-    Eterm fail = $Fail;
-    Eterm l0 = $Dst0;
-    Eterm l1 = $Dst1;
+i_select_tag2(Dst0, Dst1, Fail, Arg, Table, Tests) {
+    /* Eterm fail = $Fail; */
+    /* Eterm l0 = $Dst0; */
+    /* Eterm l1 = $Dst1; */
     Eterm arg = $Arg;
     uint64_t table = $Table;
     uint64_t idx = select_tag_table[arg & _TAG_IMMED2_MASK];
@@ -1196,9 +1196,8 @@ i_select_tag2(Dst0, Dst1, Fail, Arg, Table) {
         idx = select_tag_table_header[idx];
     }
     idx = (table >> (idx << 1)) & 0x3;
-    switch (idx) {
-    case 0: $JUMP(l0);
-    case 1: $JUMP(l1);
-    case 2: $JUMP(fail);
-    }
+
+    erts_atomic64_inc_nob(&gchain_counts[$Tests & 0xFF][$Tests >> 8][idx]);
+
+    $JUMP(I[1 + idx]);
 }

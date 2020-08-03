@@ -247,6 +247,7 @@ static Eterm native_addresses(Process* p, BeamCodeHeader*);
 extern uint8_t select_tag_table[1 << _TAG_IMMED2_SIZE];
 static void init_select_tag_table(void);
 static int build_select_tag_lookup_table(Eterm t0, Eterm t1, uint64_t *table);
+static uint8_t select_tag_test_to_idx(Eterm test);
 
 static int must_swap_floats;
 
@@ -2639,13 +2640,18 @@ load_code(LoaderState* stp)
             Eterm l1 = code[ci - 6 + 2];
             Eterm lf = code[ci - 6 + 3];
             Eterm arg = code[ci - 6 + 1]>>BEAM_WIDE_SHIFT;
+            uint16_t pt = select_tag_test_to_idx(t0)
+                | ((uint16_t)select_tag_test_to_idx(t1) << 8);
 
             erts_printf("GNURK t0:%T t1:%T l0:%p l1:%p lf:%p arg:x(%d)\n\r",
                         t0, t1, (void*)l0, (void*)l1, (void*)lf, arg);
-            code[ci - 6 + 0] = BeamOpCodeAddr(op_i_select_tag2_fffxW);
-            if (build_select_tag_lookup_table(t0, t1, &code[ci - 6 + 4]))
+            code[ci - 6 + 0] = BeamOpCodeAddr(op_i_select_tag2_fffxWI);
+            code[ci - 6 + 1] = l0;
+            code[ci - 6 + 2] = l1;
+            code[ci - 6 + 3] = lf;
+            code[ci - 6 + 4] = ((Eterm)pt << BEAM_WIDE_SHIFT) | arg;
+            if (build_select_tag_lookup_table(t0, t1, &code[ci - 6 + 5]))
                 LoadError0(stp, "Unhandled tag test in select_tag2");
-            ci -= 1;
             break;
         }
 	}
@@ -4826,4 +4832,49 @@ static int build_select_tag_lookup_table(Eterm t0, Eterm t1,
     if (add_select_tag_test(t1, 1, table))
         return 1;
     return 0;
+}
+
+
+static uint8_t select_tag_test_to_idx(Eterm test)
+{
+    switch (test) {
+    case am_is_atom:
+        return STTT_ATOM;
+    case am_is_list:
+        return STTT_LIST;
+    case am_is_bitstr:
+        return STTT_BITSTR;
+    case am_is_binary:
+        return STTT_BIN;
+    case am_is_float:
+        return STTT_FLOAT;
+    case am_is_tuple:
+        return STTT_TUPLE;
+    case am_is_integer:
+        return STTT_INT;
+    case am_is_nil:
+        return STTT_NIL;
+    case am_is_nonempty_list:
+        return STTT_NONEMPTY_LIST;
+    case am_is_number:
+        return STTT_NUMBER;
+    case am_is_map:
+        return STTT_MAP;
+    case am_is_boolean:
+        return STTT_BOOL;
+    default:
+        erts_printf("unknown test: %T\n", test);
+        return STTT_UNKNOWN;
+    }
+    return 0;
+}
+
+erts_atomic64_t gchain_counts[NOOF_STTT][NOOF_STTT][3];
+
+void gchain_init(void)
+{
+    for(unsigned x = 0; x < NOOF_STTT; x++)
+        for(unsigned y = 0; y < NOOF_STTT; y++)
+            for(unsigned z = 0; z < 3; z++)
+                erts_atomic64_init_nob(&gchain_counts[x][y][z], 0);
 }

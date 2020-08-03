@@ -34,8 +34,7 @@ typedef enum {
     BEAM_ST_ATOM,
     BEAM_ST_CATCH,
     BEAM_ST_NIL,
-
-    BEAM_STH_TUPLE = 16,
+    BEAM_STH_TUPLE,
     BEAM_STH_FUN,
     BEAM_STH_BIG,
     BEAM_STH_FLOAT,
@@ -47,5 +46,26 @@ typedef enum {
     BEAM_STH_OTHER,
     BEAM_ST_LAST
 } beam_select_tag_type_t;
+
+enum beam_select_tag_type_testname {
+    STTT_ATOM = 0,
+    STTT_LIST,
+    STTT_BITSTR,
+    STTT_BIN,
+    STTT_FLOAT,
+    STTT_TUPLE,
+    STTT_INT,
+    STTT_NIL,
+    STTT_NONEMPTY_LIST,
+    STTT_NUMBER,
+    STTT_MAP,
+    STTT_BOOL,
+    STTT_UNKNOWN,
+    NOOF_STTT
+};
+
+extern erts_atomic64_t gchain_counts[NOOF_STTT][NOOF_STTT][3];
+
+extern void gchain_init(void);
 
 #endif	/* __BEAM_SELECT_TAG_H */
