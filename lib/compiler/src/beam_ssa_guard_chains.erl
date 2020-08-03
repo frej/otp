@@ -73,10 +73,13 @@ function(F=#b_function{bs=Bs0,args=Args,anno=Anno,cnt=Cnt0}, _Opts) ->
 %%%
 analyze_head(Blocks, Args) ->
     Defs = beam_ssa:definitions(Blocks),
+    Uses = maps:map(fun(_, Ls) ->
+                            [L || {L,_} <- Ls]
+                    end, beam_ssa:uses(Blocks)),
     {_,Args2Idx} = foldl(fun(Arg, {Idx,Acc}) ->
                                  {Idx+1,[{Arg,Idx}|Acc]}
                          end, {0,[]}, Args),
-    R = analyze_block(0, Blocks, maps:from_list(Args2Idx), Defs),
+    R = analyze_block(0, Blocks, maps:from_list(Args2Idx), Defs, Uses),
     add_useful_heads(R).
 
 add_useful_heads(Result) ->
@@ -114,48 +117,50 @@ has_useful_heads(_) ->
 %%% We will follow the <condX-false>-edges and look into the
 %%% <condX-true> blocks for return instructions.
 %%%
-analyze_block(Block, Blocks, Args, Defs) ->
-    analyze_entry_bb(maps:get(Block, Blocks), Blocks, Args, Defs).
+analyze_block(Block, Blocks, Args, Defs, Uses) ->
+    analyze_entry_bb(maps:get(Block, Blocks), Blocks, Args, Defs, Uses).
 
-analyze_entry_bb(#b_blk{last=#b_ret{}}, _Blocks, _Args, _Defs) ->
+analyze_entry_bb(#b_blk{last=#b_ret{}}, _Blocks, _Args, _Defs, _Uses) ->
     %% Can't do anything useful with this one
     [];
-analyze_entry_bb(#b_blk{last=#b_switch{}}, _Blocks, _Args, _Defs) ->
+analyze_entry_bb(#b_blk{last=#b_switch{}}, _Blocks, _Args, _Defs, _Uses) ->
     %% TODO: Support switches
     [];
-analyze_entry_bb(#b_blk{last=#b_br{succ=D,fail=D}}, _Blocks, _Args, _Defs) ->
+analyze_entry_bb(#b_blk{last=#b_br{succ=D,fail=D}},
+                 _Blocks, _Args, _Defs, _Uses) ->
     [];
-analyze_entry_bb(Block=#b_blk{last=#b_br{bool=B,succ=S,fail=F}},
-                 Blocks, Args, Defs) ->
-    case has_side_effects(Block) of
+analyze_entry_bb(Block=#b_blk{is=Is, last=#b_br{bool=B,succ=S,fail=F}},
+                 Blocks, Args, Defs, Uses) ->
+    case has_side_effects(Block) orelse has_escaping_defs(Is, 0, Uses) of
         true -> [];
         false ->
             analyze_guarded_bb(0, analyze_bool(B, Args, Defs), S,  F,
-                               Blocks, Args, Defs)
+                               Blocks, Args, Defs, Uses)
     end.
 
-analyze_guarded_bb(Lbl, false, _, _, _, _, _)->
+analyze_guarded_bb(Lbl, false, _, _, _, _, _, _)->
     %% We cannot statically determine the result of the guard, so give
     %% up.
     [{true,Lbl}];
 analyze_guarded_bb(Lbl, Condition, GuardedBlock,
-                   FallthroughBlock, Blocks, Args, Defs) ->
-    [{Lbl,Condition,GuardedBlock}|analyze_bb(FallthroughBlock, Blocks, Args, Defs)].
+                   FallthroughBlock, Blocks, Args, Defs, Uses) ->
+    [{Lbl,Condition,GuardedBlock}|analyze_bb(FallthroughBlock, Blocks, Args, Defs, Uses)].
 
-analyze_bb(Lbl, Blocks, Args, Defs) ->
-    Block = maps:get(Lbl, Blocks),
-    case has_side_effects(Block) of
+analyze_bb(Lbl, Blocks, Args, Defs, Uses) ->
+    Block = #b_blk{is=Is} = maps:get(Lbl, Blocks),
+    case has_side_effects(Block) orelse has_escaping_defs(Is, Lbl, Uses) of
         true -> [{true,Lbl}];
-        false -> analyze_side_effect_free_bb(Lbl, Block, Blocks, Args, Defs)
+        false -> analyze_side_effect_free_bb(Lbl, Block, Blocks,
+                                             Args, Defs, Uses)
     end.
 
-analyze_side_effect_free_bb(Lbl,#b_blk{last=Last}, Blocks, Args, Defs) ->
+analyze_side_effect_free_bb(Lbl,#b_blk{last=Last}, Blocks, Args, Defs, Uses) ->
     case Last of
         #b_ret{} -> [{true,Lbl}];
         #b_br{succ=D,fail=D} -> [{true,Lbl}];
         #b_br{bool=Guard,succ=S,fail=F} ->
             analyze_guarded_bb(Lbl, analyze_bool(Guard, Args, Defs), S,  F,
-                               Blocks, Args, Defs);
+                               Blocks, Args, Defs, Uses);
         #b_switch{} ->
             %% TODO: Support switches
             [{true,Lbl}]
@@ -170,6 +175,17 @@ has_side_effects1([]) ->
     false;
 has_side_effects1([I|Is]) ->
     (not beam_ssa:no_side_effect(I)) orelse has_side_effects1(Is).
+
+%%%
+%%% Return true if the block has defs which live outside the block
+%%%
+has_escaping_defs([], _Lbl, _Uses) ->
+    false;
+has_escaping_defs([#b_set{dst=Dst}|Is], Lbl, Uses) ->
+    case Uses of
+        #{ Dst := [Lbl] } -> has_escaping_defs(Is, Lbl, Uses);
+        #{ Dst := _ } -> true
+    end.
 
 %%% Analyze a boolean expression to tell if can be expressed as a
 %%% simple operation on one or more of the function arguments.
