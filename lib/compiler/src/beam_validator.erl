@@ -1042,6 +1042,16 @@ vi({bs_put_utf32,{f,Fail},_,Src}, Vst) ->
                    update_type(fun meet/2, #t_integer{}, Src, SuccVst)
            end);
 
+vi({select_tag2,{f,T0L},{f,T1L},{f,Fail},Src,{atom,T0},{atom,T1}}, Vst0) ->
+    assert_term(Src, Vst0),
+    Vst1 = tag_test(Src, T0, T0L, Vst0),
+    Vst2 = tag_test(Src, T1, T1L, Vst1),
+    branch(Fail, Vst2,
+           fun(SuccVst) ->
+                   %% The next instruction is never executed.
+                   kill_state(SuccVst)
+           end);
+
 vi(_, _) ->
     error(unknown_instruction).
 
@@ -2820,3 +2830,52 @@ gcd(A, B) ->
     end.
 
 error(Error) -> throw(Error).
+
+tag_test(Src, is_atom, L, Vst) ->
+    tag_test1(Src, #t_atom{}, L, Vst);
+tag_test(Src, is_binary, L, Vst) ->
+    tag_test1(Src, #t_bitstring{size_unit=8}, L, Vst);
+tag_test(Src, is_bitstring, L, Vst) ->
+    tag_test1(Src, #t_bitstring{}, L, Vst);
+tag_test(Src, is_boolean, L, Vst) ->
+    tag_test1(Src, beam_types:make_boolean(), L, Vst);
+tag_test(Src, is_float, L, Vst) ->
+    tag_test1(Src, #t_float{}, L, Vst);
+tag_test(_Src, is_function, L, Vst) ->
+    branch(L, Vst);
+tag_test(Src, is_tuple, L, Vst) ->
+    tag_test1(Src, #t_tuple{}, L, Vst);
+tag_test(Src, is_integer, L, Vst) ->
+    tag_test1(Src, #t_integer{}, L, Vst);
+tag_test(Src, is_nonempty_list, L, Vst) ->
+    tag_test1(Src, #t_cons{}, L, Vst);
+tag_test(Src, is_list, L, Vst) ->
+    tag_test1(Src, #t_list{}, L, Vst);
+tag_test(Src, is_number, L, Vst) ->
+    tag_test1(Src, number, L, Vst);
+tag_test(Src, is_map, L, Vst) ->
+    tag_test1(Src, #t_map{}, L, Vst);
+tag_test(Src, is_nil, L, Vst) ->
+    assert_term(Src, Vst),
+    branch(L, Vst,
+           fun(FailVst) ->
+                   update_eq_types(Src, nil, FailVst)
+           end,
+           fun(SuccVst) ->
+                   update_ne_types(Src, nil, SuccVst)
+           end);
+tag_test(_Src, is_pid, L, Vst) ->
+    branch(L, Vst);
+tag_test(_Src, is_port, L, Vst) ->
+    branch(L, Vst).
+
+tag_test1(Src, Type, L, Vst) ->
+    branch(L, Vst,
+           fun(FailVst) ->
+                   %% The branch to L is taken
+                   update_type(fun meet/2, Type, Src, FailVst)
+           end,
+           fun(SuccVst) ->
+                   %% The branch to L is not taken
+                   update_type(fun subtract/2, Type, Src, SuccVst)
+           end).
