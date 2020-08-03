@@ -608,3 +608,8 @@ BEAM_FORMAT_NUMBER=0
 ##       it will never fail at runtime, or 'resume' when we know the input is
 ##       a match context.
 170: bs_start_match4/4
+
+## @spec select_tag2 Lbl0 Lbl1 FailLabel Arg Tag0 Tag1
+## @doc Jump to one of the destination labels by comparing Arg to
+##      the Tags, if no Tag matches, jump to FailLabel.
+171: select_tag2/6

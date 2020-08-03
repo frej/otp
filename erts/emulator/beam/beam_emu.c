@@ -45,6 +45,7 @@
 #endif
 #include "dtrace-wrapper.h"
 #include "erl_proc_sig_queue.h"
+#include "beam_select_tag.h"
 
 /* #define HARDDEBUG 1 */
 
@@ -328,6 +329,10 @@ static void save_stacktrace(Process* c_p, BeamInstr* pc, Eterm* reg,
 static struct StackTrace * get_trace_from_exc(Eterm exc);
 static Eterm *get_freason_ptr_from_exc(Eterm exc);
 static Eterm make_arglist(Process* c_p, Eterm* reg, int a);
+
+
+uint8_t select_tag_table[1 << _TAG_IMMED2_SIZE];
+uint8_t select_tag_table_header[1 << 4];
 
 void
 init_emulator(void)

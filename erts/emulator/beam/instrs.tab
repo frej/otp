@@ -1176,3 +1176,29 @@ raw_raise() {
         x(0) = am_badarg;
     }
 }
+
+select_tag2(Dst0, Dst1, Fail, Arg, Tag0, Tag1) {
+    erts_exit(ERTS_ERROR_EXIT,
+              "select_tag2 opcode should have been removed by loader\n");
+}
+
+i_select_tag2(Dst0, Dst1, Fail, Arg, Table) {
+    Eterm fail = $Fail;
+    Eterm l0 = $Dst0;
+    Eterm l1 = $Dst1;
+    Eterm arg = $Arg;
+    uint64_t table = $Table;
+    uint64_t idx = select_tag_table[arg & _TAG_IMMED2_MASK];
+
+    if (idx == BEAM_ST_BOXED) {
+        ASSERT(is_boxed((x)));
+        idx = (*boxed_val(arg) & _TAG_HEADER_MASK) >> _TAG_PRIMARY_SIZE;
+        idx = select_tag_table_header[idx];
+    }
+    idx = (table >> (idx << 1)) & 0x3;
+    switch (idx) {
+    case 0: $JUMP(l0);
+    case 1: $JUMP(l1);
+    case 2: $JUMP(fail);
+    }
+}

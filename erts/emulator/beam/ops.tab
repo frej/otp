@@ -1748,3 +1748,9 @@ move n D=y => init D
 move_x1 c
 move_x2 c
 
+#
+# OTP 23+
+#
+select_tag2 f? f? f? x a a
+
+i_select_tag2 f? f? f? x W
