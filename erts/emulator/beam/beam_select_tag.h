@@ -21,6 +21,8 @@
 #ifndef __BEAM_SELECT_TAG_H
 #define __BEAM_SELECT_TAG_H
 
+//#define BEAM_PROFILE_SELECT_TAG
+
 extern uint8_t select_tag_table[1 << _TAG_IMMED2_SIZE]; /* in beam_emu.c */
 extern uint8_t select_tag_table_header[1 << 4]; /* in beam_emu.c */
 

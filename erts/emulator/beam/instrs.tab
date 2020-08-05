@@ -1197,11 +1197,12 @@ i_select_tag2(Dst0, Dst1, Fail, Arg, Table, Tests) {
     }
     idx = (table >> (idx << 1)) & 0x3;
 
+#ifdef BEAM_PROFILE_SELECT_TAG
     erts_atomic64_inc_nob(&gchain_counts[$Tests & 0xFF][$Tests >> 8][idx]);
 
     /* erts_printf("ZZZZ %p %s %s idx:%u %T\n\r", */
     /*             (void*)I, gchain_test_name($Tests & 0xFF), gchain_test_name($Tests >> 8), */
     /*             idx, arg); */
-
+#endif BEAM_PROFILE_SELECT_TAG
     $JUMP(I[1 + idx]);
 }
