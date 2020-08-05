@@ -2646,7 +2646,10 @@ load_code(LoaderState* stp)
             /* erts_printf("GNURK %p t0:%T t1:%T l0:%p l1:%p lf:%p arg:x(%d)\n\r", */
             /*             &code[ci - 6 + 0], */
             /*             t0, t1, (void*)l0, (void*)l1, (void*)lf, arg); */
-            code[ci - 6 + 0] = BeamOpCodeAddr(op_i_select_tag2_fffxWI);
+            if (t0 == am_is_nonempty_list && t1 == am_is_nil)
+                code[ci - 6 + 0] = BeamOpCodeAddr(op_i_select_tag2_nel_nil_fffxWI);
+            else
+                code[ci - 6 + 0] = BeamOpCodeAddr(op_i_select_tag2_fffxWI);
             code[ci - 6 + 1] = l0;
             code[ci - 6 + 2] = l1;
             code[ci - 6 + 3] = lf;

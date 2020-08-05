@@ -1206,3 +1206,24 @@ i_select_tag2(Dst0, Dst1, Fail, Arg, Table, Tests) {
 #endif BEAM_PROFILE_SELECT_TAG
     $JUMP(I[1 + idx]);
 }
+
+i_select_tag2_nel_nil(Dst0, Dst1, Fail, Arg, Table, Tests) {
+
+#ifdef BEAM_PROFILE_SELECT_TAG
+    if (is_list($Arg)) {
+        erts_atomic64_inc_nob(&gchain_counts[$Tests & 0xFF][$Tests >> 8][0]);
+    } else if (is_nil($Arg)) {
+        erts_atomic64_inc_nob(&gchain_counts[$Tests & 0xFF][$Tests >> 8][1]);
+    } else {
+        erts_atomic64_inc_nob(&gchain_counts[$Tests & 0xFF][$Tests >> 8][2]);
+    }
+#endif BEAM_PROFILE_SELECT_TAG
+
+    if (is_list($Arg)) {
+        $JUMP($Dst0);
+    } else if (is_nil($Arg)) {
+        $JUMP($Dst1);
+    } else {
+        $JUMP($Fail);
+    }
+}
