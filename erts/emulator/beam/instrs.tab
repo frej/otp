@@ -1219,11 +1219,11 @@ i_select_tag2_nel_nil(Dst0, Dst1, Fail, Arg, Table, Tests) {
     }
 #endif BEAM_PROFILE_SELECT_TAG
 
-    if (ERTS_LIKELY(is_list($Arg))) {
-        $JUMP($Dst0);
-    } else if (is_nil($Arg)) {
-        $JUMP($Dst1);
-    } else {
+    if (ERTS_UNLIKELY(is_not_list($Arg))) {
+        if (ERTS_LIKELY(is_nil($Arg))) {
+            $JUMP($Dst1);
+        }
         $JUMP($Fail);
     }
+    $JUMP($Dst0);
 }
