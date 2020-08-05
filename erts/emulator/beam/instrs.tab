@@ -1203,7 +1203,7 @@ i_select_tag2(Dst0, Dst1, Fail, Arg, Table, Tests) {
     /* erts_printf("ZZZZ %p %s %s idx:%u %T\n\r", */
     /*             (void*)I, gchain_test_name($Tests & 0xFF), gchain_test_name($Tests >> 8), */
     /*             idx, arg); */
-#endif BEAM_PROFILE_SELECT_TAG
+#endif /* BEAM_PROFILE_SELECT_TAG */
     $JUMP(I[1 + idx]);
 }
 
@@ -1217,7 +1217,7 @@ i_select_tag2_nel_nil(Dst0, Dst1, Fail, Arg, Table, Tests) {
     } else {
         erts_atomic64_inc_nob(&gchain_counts[$Tests & 0xFF][$Tests >> 8][2]);
     }
-#endif BEAM_PROFILE_SELECT_TAG
+#endif /* BEAM_PROFILE_SELECT_TAG */
 
     if (ERTS_UNLIKELY(is_not_list($Arg))) {
         if (ERTS_LIKELY(is_nil($Arg))) {
