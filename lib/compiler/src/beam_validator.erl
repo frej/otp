@@ -2867,6 +2867,8 @@ tag_test(Src, is_nil, L, Vst) ->
 tag_test(_Src, is_pid, L, Vst) ->
     branch(L, Vst);
 tag_test(_Src, is_port, L, Vst) ->
+    branch(L, Vst);
+tag_test(_Src, is_reference, L, Vst) ->
     branch(L, Vst).
 
 tag_test1(Src, Type, L, Vst) ->
