@@ -1054,13 +1054,23 @@ vi({select_tag2,{f,T0L},{f,T1L},{f,Fail},Src,{atom,T0},{atom,T1}}, Vst0) ->
 
 vi({is_nelist_or_nil,{f,Nil},{f,Fail},Src}, Vst0) ->
     assert_term(Src, Vst0),
-    Vst1 = type_test(Nil, #t_cons{}, Src, Vst0),
+    Vst1 = branch(Nil, Vst0,
+                  fun(FailVst) ->
+                          %% We branch to Nil
+                          update_eq_types(Src, nil, FailVst)
+                  end,
+                  fun(SuccVst) ->
+                          %% We do not take the branch to nil
+                          update_ne_types(Src, nil, SuccVst)
+                  end),
     branch(Fail, Vst1,
            fun(FailVst) ->
-                   update_eq_types(Src, nil, FailVst)
+                   %% We branch to Fail, this is not a cons
+                   update_type(fun subtract/2, #t_cons{}, Src, FailVst)
            end,
            fun(SuccVst) ->
-                   update_ne_types(Src, nil, SuccVst)
+                   %% We fell through, this must be a cons
+                   update_type(fun meet/2, #t_cons{}, Src, SuccVst)
            end);
 
 vi(_, _) ->
