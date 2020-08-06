@@ -1052,6 +1052,17 @@ vi({select_tag2,{f,T0L},{f,T1L},{f,Fail},Src,{atom,T0},{atom,T1}}, Vst0) ->
                    kill_state(SuccVst)
            end);
 
+vi({is_nelist_or_nil,{f,Nil},{f,Fail},Src}, Vst0) ->
+    assert_term(Src, Vst0),
+    Vst1 = type_test(Nil, #t_cons{}, Src, Vst0),
+    branch(Fail, Vst1,
+           fun(FailVst) ->
+                   update_eq_types(Src, nil, FailVst)
+           end,
+           fun(SuccVst) ->
+                   update_ne_types(Src, nil, SuccVst)
+           end);
+
 vi(_, _) ->
     error(unknown_instruction).
 

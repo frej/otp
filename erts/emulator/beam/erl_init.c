@@ -53,8 +53,6 @@
 #include "erl_osenv.h"
 #include "erl_proc_sig_queue.h"
 
-#include "beam_select_tag.h"
-
 #ifdef HIPE
 #include "hipe_mode_switch.h"	/* for hipe_mode_switch_init() */
 #include "hipe_signal.h"	/* for hipe_signal_init() */
@@ -330,7 +328,6 @@ erl_init(int ncpu,
     H_MIN_SIZE      = erts_next_heap_size(H_MIN_SIZE, 0);
     BIN_VH_MIN_SIZE = erts_next_heap_size(BIN_VH_MIN_SIZE, 0);
 
-    gchain_init();
     erts_init_trace();
     erts_init_bits();
     erts_code_ix_init();

@@ -110,7 +110,7 @@
                    'extract' |
                    'get_hd' | 'get_map_element' | 'get_tl' | 'get_tuple_element' |
                    'has_map_field' |
-                   'is_nonempty_list' | 'is_tagged_tuple' |
+                   'is_nonempty_list' | 'is_nelist_or_nil' |'is_tagged_tuple' |
                    'kill_try_tag' |
                    'landingpad' |
                    'make_fun' | 'new_try_tag' |
@@ -214,6 +214,7 @@ no_side_effect(#b_set{op=Op}) ->
         get_tuple_element -> true;
         has_map_field -> true;
         is_nonempty_list -> true;
+        is_nelist_or_nil -> true;
         is_tagged_tuple -> true;
         make_fun -> true;
         put_map -> true;

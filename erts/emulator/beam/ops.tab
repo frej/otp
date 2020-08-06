@@ -1751,7 +1751,4 @@ move_x2 c
 #
 # OTP 23+
 #
-select_tag2 f? f? f? x a a
-
-i_select_tag2 f? f? f? x W I
-i_select_tag2_nel_nil f? f? f? x W I
+is_nelist_or_nil f? f? x

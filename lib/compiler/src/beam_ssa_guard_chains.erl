@@ -59,8 +59,8 @@ function(F=#b_function{bs=Bs0,args=Args,anno=Anno,cnt=Cnt0}, _Opts) ->
         [{true,_}|_] -> ok;
         [] -> ok
     end,
-    case {only_tag_tests(R), length(R) - 1} of
-        {true, Len} when Len =:= 2 ->
+    case {only_tag_tests(R), R} of
+        {true, [{_,{_,is_nonempty_list},_},{_,{_,is_nil},_},{true,_}]} ->
             {Bs, Cnt} = insert_select_tag(R, Bs0, Cnt0),
             {F#b_function{bs=Bs,cnt=Cnt},{MFA,R}};
         _ ->
@@ -263,18 +263,17 @@ only_tag_tests(_Arg, _Guards) ->
     io:format("!!! arg:~p, ~p~n", [_Arg, _Guards]),
     false.
 
-insert_select_tag([{Parent,{Var=#b_var{},TagTest0},Lbl0},
-                   {_,{Var,TagTest1},Lbl1},
+insert_select_tag([{Parent,{Var=#b_var{},is_nonempty_list},Lbl0},
+                   {_,{Var,is_nil},Lbl1},
                    {true,FailLbl}], Bs0, Cnt0) ->
     %% Replace the chain of branches with a switch using a magic operand
     Blk0 = #b_blk{is=Is0} = maps:get(Parent, Bs0),
     SwitchArg = #b_var{name={magic_switch_arg,Cnt0}},
-    Is = Is0 ++ [#b_set{op=tag_select,dst=SwitchArg,
-                        args=[#b_literal{val=TagTest0},
-                              #b_literal{val=TagTest1},Var]}],
+    Is = Is0 ++ [#b_set{op=is_nelist_or_nil_pred,dst=SwitchArg,
+                        args=[Var]}],
     Last=#b_switch{arg=SwitchArg,fail=FailLbl,
-                   list=[{#b_literal{val=0},Lbl0},
-                         {#b_literal{val=1},Lbl1}]},
+                   list=[{#b_literal{val=0},Lbl1},
+                         {#b_literal{val=1},Lbl0}]},
     Blk = Blk0#b_blk{is=Is,last=Last},
     Bs1 = Bs0#{ Parent => Blk },
     Bs2 = maps:from_list(beam_ssa_dead:opt(beam_ssa:linearize(Bs1))),

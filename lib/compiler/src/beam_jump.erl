@@ -598,8 +598,8 @@ opt([{test,_,{f,_}=Lbl,_,_,_}=I|Is], Acc, St) ->
     opt(Is, [I|Acc], label_used(Lbl, St));
 opt([{select,_,_R,Fail,Vls}=I|Is], Acc, St) ->
     skip_unreachable(Is, [I|Acc], label_used([Fail|Vls], St));
-opt([{select_tag2,L0,L1,Fail,_,_,_}=I|Is], Acc, St) ->
-    skip_unreachable(Is, [I|Acc], label_used([L0,L1,Fail], St));
+opt([{is_nelist_or_nil,Nil,Fail,_}=I|Is], Acc, St) ->
+    opt(Is, [I|Acc], label_used([Nil,Fail], St));
 opt([{label,From}=I,{label,To}|Is], Acc, #st{replace=Replace}=St) ->
     opt([I|Is], Acc, St#st{replace=Replace#{To => From}});
 opt([{jump,{f,_}=X}|[{label,_},{jump,X}|_]=Is], Acc, St) ->
@@ -713,7 +713,6 @@ is_unreachable_after({func_info,_M,_F,_A}) -> true;
 is_unreachable_after(return) -> true;
 is_unreachable_after({jump,_Lbl}) -> true;
 is_unreachable_after({select,_What,_R,_Lbl,_Cases}) -> true;
-is_unreachable_after({select_tag2,_,_,_,_,_,_}) -> true;
 is_unreachable_after({loop_rec_end,_}) -> true;
 is_unreachable_after({wait,_}) -> true;
 is_unreachable_after(I) -> is_exit_instruction(I).
@@ -834,8 +833,8 @@ instr_labels({test,_,Fail,_,_,_}) ->
     do_instr_labels(Fail);
 instr_labels({select,_,_,Fail,Vls}) ->
     do_instr_labels_list(Vls, do_instr_labels(Fail));
-instr_labels({select_tag2,L0,L1,Fail,_,_,_}) ->
-    do_instr_labels_list([L0,L1], do_instr_labels(Fail));
+instr_labels({is_nelist_or_nil,Nil,Fail,_}) ->
+    do_instr_labels_list([Nil], do_instr_labels(Fail));
 instr_labels({'try',_,Lbl}) ->
     do_instr_labels(Lbl);
 instr_labels({'catch',_,Lbl}) ->

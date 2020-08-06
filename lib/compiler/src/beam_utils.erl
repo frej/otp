@@ -69,6 +69,7 @@ is_pure_test({test,is_eq_exact,_,[_,_]}) -> true;
 is_pure_test({test,is_ne_exact,_,[_,_]}) -> true;
 is_pure_test({test,is_ge,_,[_,_]}) -> true;
 is_pure_test({test,is_lt,_,[_,_]}) -> true;
+%is_pure_test({test,is_nelist_or_nil,_,[_]}) -> true;
 is_pure_test({test,is_nonempty_list,_,[_]}) -> true;
 is_pure_test({test,is_tagged_tuple,_,[_,_,_]}) -> true;
 is_pure_test({test,test_arity,_,[_,_]}) -> true;
@@ -100,14 +101,10 @@ replace_labels_1([{select,I,R,{f,Fail0},Vls0}|Is], Acc, D, Fb) ->
 	      end, Vls0),
     Fail = label(Fail0, D, Fb),
     replace_labels_1(Is, [{select,I,R,{f,Fail},Vls}|Acc], D, Fb);
-replace_labels_1([{select_tag2,
-                   {f,L0},{f,L1},{f,F},I,T0,T1}|Is], Acc, D, Fb) ->
+replace_labels_1([{is_nelist_or_nil,{f,NilLbl},{f,F},I}|Is], Acc, D, Fb) ->
     replace_labels_1(Is,
-                     [{select_tag2,
-                       {f,label(L0, D, Fb)},
-                       {f,label(L1, D, Fb)},
-                       {f,label(F, D, Fb)},
-                       I,T0,T1}|Acc], D, Fb);
+                     [{is_nelist_or_nil,
+                       {f,label(NilLbl, D, Fb)},{f,label(F, D, Fb)},I}|Acc], D, Fb);
 replace_labels_1([{'try',R,{f,Lbl}}|Is], Acc, D, Fb) ->
     replace_labels_1(Is, [{'try',R,{f,label(Lbl, D, Fb)}}|Acc], D, Fb);
 replace_labels_1([{'catch',R,{f,Lbl}}|Is], Acc, D, Fb) ->

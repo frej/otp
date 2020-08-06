@@ -383,6 +383,7 @@ classify_heap_need(get_map_element) -> neutral;
 classify_heap_need(get_tl) -> neutral;
 classify_heap_need(get_tuple_element) -> neutral;
 classify_heap_need(has_map_field) -> neutral;
+classify_heap_need(is_nelist_or_nil_pred) -> neutral;
 classify_heap_need(is_nonempty_list) -> neutral;
 classify_heap_need(is_tagged_tuple) -> neutral;
 classify_heap_need(kill_try_tag) -> gc;
@@ -400,7 +401,6 @@ classify_heap_need(remove_message) -> neutral;
 classify_heap_need(resume) -> gc;
 classify_heap_need(set_tuple_element) -> gc;
 classify_heap_need(succeeded) -> neutral;
-classify_heap_need(tag_select) -> neutral;
 classify_heap_need(timeout) -> gc;
 classify_heap_need(wait) -> gc;
 classify_heap_need(wait_timeout) -> gc.
@@ -992,9 +992,9 @@ cg_switch(Is0, Last, St0) ->
                        end, List1),
             Is = reverse(More, [{select_tuple_arity,Tuple,Fail,{list,List}}]),
             {Is,St};
-        [{tag_select,T0,T1,Arg,Src}|More] ->
-            [{integer,0},T0L,{integer,1},T1L] = List1,
-            Is = reverse(More, [{select_tag2,T0L,T1L,Fail,Arg,T0,T1}]),
+        [{is_nelist_or_nil_pred,Arg,Src}|More] ->
+            [{integer,0},IsNil,{integer,1},IsList] = List1,
+            Is = reverse(More, [{is_nelist_or_nil,IsNil,Fail,Arg},jump(IsList)]),
             {Is,St};
         _ ->
             SelectVal = {select_val,Src,Fail,{list,List1}},
@@ -1200,6 +1200,9 @@ cg_block([#cg_set{op=is_tagged_tuple,dst=Bool,args=Args0}], {Bool,Fail}, St) ->
 cg_block([#cg_set{op=is_nonempty_list,dst=Bool,args=Args0}], {Bool,Fail}, St) ->
     Args = beam_args(Args0, St),
     {[{test,is_nonempty_list,ensure_label(Fail, St),Args}],St};
+cg_block([#cg_set{op=is_nelist_or_nil,dst=Bool,args=Args0}], {Bool,_Fail}, St) ->
+    Args = beam_args(Args0, St),
+    {[{is_nelist_or_nil,Args}],St};
 cg_block([#cg_set{op=has_map_field,dst=Dst0,args=Args0}], {Dst0,Fail0}, St) ->
     Fail = ensure_label(Fail0, St),
     case beam_args([Dst0|Args0], St) of
@@ -1702,8 +1705,8 @@ cg_instr(remove_message, [], _Dst) ->
     [remove_message];
 cg_instr(resume, [A,B], _Dst) ->
     [{bif,raise,{f,0},[A,B],{x,0}}];
-cg_instr(tag_select, [Tag0,Tag1,Src], Dst) ->
-    [{tag_select,Tag0,Tag1,Src,Dst}];
+cg_instr(is_nelist_or_nil_pred, [Src], Dst) ->
+    [{is_nelist_or_nil_pred,Src,Dst}];
 cg_instr(timeout, [], _Dst) ->
     [timeout].
 

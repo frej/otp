@@ -609,7 +609,7 @@ BEAM_FORMAT_NUMBER=0
 ##       a match context.
 170: bs_start_match4/4
 
-## @spec select_tag2 Lbl0 Lbl1 FailLabel Arg Tag0 Tag1
-## @doc Jump to one of the destination labels by comparing Arg to
-##      the Tags, if no Tag matches, jump to FailLabel.
-171: select_tag2/6
+## @spec is_nelist_or_nil NilLbl FailLabel Arg
+## @doc Fall through if Arg is a non-empty list, jump to NilLbl if Arg
+##      is nil, and jump to FailLabel if Arg is neither.
+171: is_nelist_or_nil/3

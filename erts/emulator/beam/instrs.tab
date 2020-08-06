@@ -1177,53 +1177,14 @@ raw_raise() {
     }
 }
 
-select_tag2(Dst0, Dst1, Fail, Arg, Tag0, Tag1) {
-    erts_exit(ERTS_ERROR_EXIT,
-              "select_tag2 opcode should have been removed by loader\n");
-}
-
-i_select_tag2(Dst0, Dst1, Fail, Arg, Table, Tests) {
-    /* Eterm fail = $Fail; */
-    /* Eterm l0 = $Dst0; */
-    /* Eterm l1 = $Dst1; */
-    Eterm arg = $Arg;
-    uint64_t table = $Table;
-    uint64_t idx = select_tag_table[arg & _TAG_IMMED2_MASK];
-
-    if (idx == BEAM_ST_BOXED) {
-        ASSERT(is_boxed((x)));
-        idx = (*boxed_val(arg) & _TAG_HEADER_MASK) >> _TAG_PRIMARY_SIZE;
-        idx = select_tag_table_header[idx];
-    }
-    idx = (table >> (idx << 1)) & 0x3;
-
-#ifdef BEAM_PROFILE_SELECT_TAG
-    erts_atomic64_inc_nob(&gchain_counts[$Tests & 0xFF][$Tests >> 8][idx]);
-
-    /* erts_printf("ZZZZ %p %s %s idx:%u %T\n\r", */
-    /*             (void*)I, gchain_test_name($Tests & 0xFF), gchain_test_name($Tests >> 8), */
-    /*             idx, arg); */
-#endif /* BEAM_PROFILE_SELECT_TAG */
-    $JUMP(I[1 + idx]);
-}
-
-i_select_tag2_nel_nil(Dst0, Dst1, Fail, Arg, Table, Tests) {
-
-#ifdef BEAM_PROFILE_SELECT_TAG
-    if (is_list($Arg)) {
-        erts_atomic64_inc_nob(&gchain_counts[$Tests & 0xFF][$Tests >> 8][0]);
-    } else if (is_nil($Arg)) {
-        erts_atomic64_inc_nob(&gchain_counts[$Tests & 0xFF][$Tests >> 8][1]);
-    } else {
-        erts_atomic64_inc_nob(&gchain_counts[$Tests & 0xFF][$Tests >> 8][2]);
-    }
-#endif /* BEAM_PROFILE_SELECT_TAG */
-
+is_nelist_or_nil(NilDst, Fail, Arg) {
     if (ERTS_UNLIKELY(is_not_list($Arg))) {
-        if (ERTS_LIKELY(is_nil($Arg))) {
-            $JUMP($Dst1);
+        if (is_nil($Arg)) {
+            $JUMP($NilDst);
         }
         $JUMP($Fail);
     }
-    $JUMP($Dst0);
+    I = $NEXT_INSTRUCTION;
+    ASSERT(VALID_INSTR(* (Eterm *)I));
+    Goto(*I);
 }

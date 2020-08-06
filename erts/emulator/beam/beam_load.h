@@ -24,7 +24,6 @@
 #include "beam_opcodes.h"
 #include "erl_process.h"
 #include "erl_fun.h"
-#include "beam_select_tag.h"
 
 #define ERTS_BEAM_MAX_OPARGS 8
 #define ERTS_BEAM_NUM_CHUNK_TYPES 11
