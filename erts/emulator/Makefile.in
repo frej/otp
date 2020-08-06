@@ -750,6 +750,7 @@ endif
 # Usually the same as the default rule, but certain platforms (e.g. win32) mix
 # different compilers
 $(OBJDIR)/beam_emu.o: beam/beam_emu.c
+	$(V_EMU_CC) -S -fverbose-asm $(subst -O2, $(GEN_OPT_FLGS), $(CFLAGS)) $(INCLUDES) -c $< -o $(OBJDIR)/beam_emu.S
 	$(V_EMU_CC) $(subst -O2, $(GEN_OPT_FLGS), $(CFLAGS)) $(INCLUDES) -c $< -o $@
 
 $(OBJDIR)/beam_emu.S: beam/beam_emu.c
