@@ -1187,6 +1187,7 @@ public:
     }
 
     Label embed_vararg_rodata(const std::vector<ArgVal> &args, int y_offset);
+    Label embed_labels_rodata(const std::vector<UWordNA> &labels);
 
     unsigned getCodeSize() {
         ASSERT(code.hasBaseAddress());

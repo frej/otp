@@ -236,6 +236,23 @@ Label BeamModuleAssembler::embed_vararg_rodata(const std::vector<ArgVal> &args,
     return label;
 }
 
+Label BeamModuleAssembler::embed_labels_rodata(
+        const std::vector<UWordNA> &data) {
+    Label label = a.newLabel();
+
+    a.section(rodata);
+    a.bind(label);
+
+    a.align(kAlignData, 8);
+    for (UWordNA lbl : data) {
+        a.embedLabel(labels[lbl]);
+    }
+
+    a.section(code.textSection());
+
+    return label;
+}
+
 static void i_emit_nyi(char *msg) {
     erts_exit(ERTS_ERROR_EXIT, "NYI: %s\n", msg);
 }
