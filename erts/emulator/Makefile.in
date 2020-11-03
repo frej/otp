@@ -921,6 +921,7 @@ COMMON_OBJS = \
 ASMJIT_OBJS = $(patsubst %.cpp,$(OBJDIR)/%.o,$(ASMJIT_CPP))
 
 JIT_OBJS = \
+	$(OBJDIR)/adv_select.o \
 	$(OBJDIR)/asm_load.o \
 	$(OBJDIR)/beam_asm.o \
 	$(OBJDIR)/beam_asm_global.o \

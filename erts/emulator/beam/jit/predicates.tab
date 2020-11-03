@@ -113,3 +113,17 @@ pred.consecutive_words(S1, D1, S2, D2) {
     return S1.type == S2.type && S1.val + 1 == S2.val &&
 	D1.type == D2.type && D1.val + 1 == D2.val;
 }
+
+// Test whether an advanced jump table can be used.
+pred.use_adv_jump_tab(Size, Rest, MinSize) {
+    Sint i;
+
+    if (Size.val < 2 * MinSize || Size.val % 2 != 0)
+        return 0;
+
+    for (i = 0; i < Size.val; i += 2)
+        if (Rest[i].type != TAG_i || Rest[i+1].type != TAG_f)
+            return 0;
+
+    return erts_adv_select;
+}

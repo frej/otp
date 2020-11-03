@@ -201,6 +201,7 @@ int erts_no_line_info = 0;	/* -L: Don't load line information */
 
 #ifdef BEAMASM
 int erts_asm_dump = 0;		/* -asmdump: Dump assembly code */
+int erts_adv_select = 0;	/* -advselect: Use advanced selects */
 #endif
 
 /*
@@ -588,6 +589,7 @@ void erts_usage(void)
 		 ERTS_ASYNC_THREAD_MAX_STACK_SIZE);
 #ifdef BEAMASM
     erts_fprintf(stderr, "-asmdump       dump generated assembly code for each module loaded\n");
+    erts_fprintf(stderr, "-advselect     use advanced select handling\n");
 #endif
     erts_fprintf(stderr, "-A number      set number of threads in async thread pool,\n");
     erts_fprintf(stderr, "               valid range is [1-%d]\n",
@@ -2114,6 +2116,10 @@ erl_start(int argc, char **argv)
 #ifdef BEAMASM
 	    if (strcmp(argv[i]+2, "smdump") == 0) {
 		erts_asm_dump = 1;
+		break;
+	    }
+	    if (strcmp(argv[i]+2, "dvselect") == 0) {
+		erts_adv_select = 1;
 		break;
 	    }
 #endif

@@ -39,6 +39,8 @@ extern "C"
 #include "beam_asm.h"
 }
 
+#include "adv_select.hpp"
+
 class ArgVal {
     BeamOpArg gen_op;
 
@@ -1392,6 +1394,15 @@ protected:
             mov_arg(getArgRef(to), from);
         }
     }
+
+    void adv_select_build(SelectBuilder &sb,
+                          unsigned left,
+                          unsigned right,
+                          Label where);
+    unsigned adv_select_split(SelectBuilder &sb, unsigned left, unsigned right);
+    void adv_select_build_cluster(SelectBuilder &sb, unsigned idx);
+    void adv_select_build_jump_table(SelectBuilder &sb, const SelectBuilder::Cluster &c);
+    void adv_select_build_search_table(SelectBuilder &sb, const SelectBuilder::Cluster &c);
 };
 
 void beamasm_update_perf_info(std::string modulename,

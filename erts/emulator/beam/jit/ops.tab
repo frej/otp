@@ -141,6 +141,11 @@ init_yregs I *
 # bytes. Therefore we shouldn't use a jump table if there are too few
 # values.
 
+select_val S Fail=fn Size=u Rest=* | use_adv_jump_tab(Size, Rest, 6) => \
+  adv_jump_tab(S, Fail, Size, Rest)
+is_integer Fail=f S | select_val S=s Fail=fn Size=u Rest=* | use_adv_jump_tab(Size, Rest, 6) => \
+  adv_jump_tab(S, Fail, Size, Rest)
+
 select_val S Fail=fn Size=u Rest=* | use_jump_tab(Size, Rest, 6) => \
   jump_tab(S, Fail, Size, Rest)
 is_integer Fail=f S | select_val S=s Fail=fn Size=u Rest=* | use_jump_tab(Size, Rest, 6) => \
@@ -178,6 +183,8 @@ i_select_val_lins s fn I *
 i_select_tuple_arity S f? I *
 
 i_jump_on_val s fn I I *
+
+i_adv_jump_on_val s fn I *
 
 is_number f? s
 

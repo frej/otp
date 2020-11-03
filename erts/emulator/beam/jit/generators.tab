@@ -516,3 +516,54 @@ gen.allocate_heap_zero(Ns, Nh, Live) {
 
     return alloc;
 }
+
+gen.adv_jump_tab(Src, Fail, Size, Rest) {
+    Sint i;
+    Sint arity;
+    int fixed_args, noof_choices = 0, dst = 0;
+    BeamOp* op;
+    BeamOpArg *tmp;
+
+    ASSERT(Size.val >= 2 && Size.val % 2 == 0);
+    ASSERT(Fail.type == TAG_f);
+
+    for (i = 0; i < Size.val; i += 2) {
+        ASSERT(Rest[i].type == TAG_i && Rest[i+1].type == TAG_f);
+
+	/* Check if we have any values going to the fail label.
+	   XXXX Is this already guaranteed by the compiler?  */
+	if (Rest[i+1].val != Fail.val)
+	    noof_choices++;
+    }
+    tmp = (BeamOpArg *) erts_alloc(ERTS_ALC_T_LOADER_TMP,
+				   sizeof(BeamOpArg)*noof_choices*2);
+
+    for (i = 0, dst = 0; i < Size.val; i += 2) {
+	if (Rest[i+1].val != Fail.val) {
+	    tmp[dst++] = Rest[i];
+	    tmp[dst++] = Rest[i + 1];
+	}
+    }
+    beam_load_sort_select_vals(tmp, noof_choices);
+
+    /* Allocate structure and fill in the fixed fields. */
+    $NewBeamOp(S, op);
+    op->next = NULL;
+    $BeamOpNameArity(op, i_adv_jump_on_val, 3);
+    fixed_args = op->arity;
+    arity = fixed_args + noof_choices*2;
+    $BeamOpArity(op, arity);
+    op->a[0] = Src;
+    op->a[1] = Fail;
+    op->a[2].type = TAG_u;
+    op->a[2].val = noof_choices;
+
+    for (i = 0; i < noof_choices; i++) {
+        op->a[fixed_args + i * 2] = tmp[i * 2];
+	op->a[fixed_args + i * 2 + 1] = tmp[i * 2 + 1];
+    }
+
+    erts_free(ERTS_ALC_T_LOADER_TMP, (void *) tmp);
+    return op;
+}
+

@@ -19,6 +19,7 @@
  */
 #include <algorithm>
 #include "beam_asm.hpp"
+#include <jit/adv_select.hpp>
 
 using namespace asmjit;
 
@@ -260,4 +261,179 @@ void BeamModuleAssembler::emit_i_jump_on_val(const ArgVal &Src,
     if (Fail.getType() == ArgVal::i) {
         a.bind(fail);
     }
+}
+
+void BeamModuleAssembler::adv_select_build(SelectBuilder &sb,
+                                           unsigned left,
+                                           unsigned right,
+                                           Label where) {
+    const SelectBuilder::ClusterVec &cs = sb.get_clusters();
+
+    if (where.isValid())
+        a.bind(where);
+    if (left == right) {
+        adv_select_build_cluster(sb, left);
+        return;
+    }
+    unsigned s = adv_select_split(sb, left, right);
+
+    comment("Compare input to %ld", cs[s + 1].low);
+    UWord pivot = cs[s + 1].low;
+    if (Support::isInt32((Sint)pivot)) {
+        a.cmp(ARG1, imm(pivot));
+    } else {
+        a.mov(ARG2, imm(pivot));
+        a.cmp(ARG1, ARG2);
+    }
+
+    if (left == s && cs[left].has_single_dest() && s + 1 == right &&
+        cs[right].has_single_dest()) {
+        a.jl(labels[cs[left].get_single_dest()]);
+        a.jmp(labels[cs[right].get_single_dest()]);
+    } else if (left == s && cs[left].has_single_dest()) {
+        // If input < pivot we make a branch to the fail label
+        a.jl(labels[cs[left].get_single_dest()]);
+        // Fall through to right subtree
+        adv_select_build(sb, s + 1, right, Label());
+    } else if (s + 1 == right && cs[right].has_single_dest()) {
+        // If input >= pivot we make a branch to the fail label
+        a.jae(labels[cs[right].get_single_dest()]);
+        // Fall through to left subtree
+        adv_select_build(sb, left, s, Label());
+    } else {
+        // Fall through to the left subtree
+        Label rtree = a.newLabel();
+
+        a.jae(rtree);
+        adv_select_build(sb, left, s, Label());
+        adv_select_build(sb, s + 1, right, rtree);
+    }
+}
+
+unsigned BeamModuleAssembler::adv_select_split(SelectBuilder &sb,
+                                               unsigned left,
+                                               unsigned right) {
+    unsigned l = left, r = right;
+    unsigned balance = 0;
+    unsigned left_weight = 0, right_weight = 0;
+    const SelectBuilder::ClusterVec &cs = sb.get_clusters();
+
+    while (l + 1 < r) {
+        if (left_weight < right_weight ||
+            (left_weight == right_weight && (balance & 1))) {
+            unsigned t = 1 + l++;
+            left_weight += cs[t].noof_values(&sb);
+        } else {
+            unsigned t = (r--) - 1;
+            right_weight += cs[t].noof_values(&sb);
+        }
+        balance++;
+    }
+    return l;
+}
+
+void BeamModuleAssembler::emit_i_adv_jump_on_val(
+        const ArgVal &Src,
+        const ArgVal &Fail,
+        const ArgVal &Size,
+        const std::vector<ArgVal> &args) {
+    SelectBuilder sb(Fail.getValue(), args);
+
+    /* Check that the argument is a small integer */
+    mov_arg(ARG1, Src);
+    a.mov(RETd, ARG1d);
+    a.and_(RETb, imm(_TAG_IMMED1_MASK));
+    a.cmp(RETb, imm(_TAG_IMMED1_SMALL));
+    a.jne(labels[Fail.getValue()]);
+
+    /* Move the raw untagged value into ARG1 */
+    a.shr(ARG1, imm(_TAG_IMMED1_SIZE));
+
+    adv_select_build(sb, 0, sb.get_clusters().size() - 1, Label());
+}
+
+void BeamModuleAssembler::adv_select_build_cluster(SelectBuilder &sb,
+                                                   unsigned idx) {
+    const SelectBuilder::Cluster &c = sb.get_clusters()[idx];
+
+    // We are done, the cluster tells us what to do
+    ASSERT(!c.has_single_dest());
+
+    switch (c.kind) {
+    case SelectBuilder::Cluster::JUMP_TABLE:
+        adv_select_build_jump_table(sb, c);
+        return;
+    case SelectBuilder::Cluster::SEARCH_TABLE:
+        adv_select_build_search_table(sb, c);
+        return;
+    case SelectBuilder::Cluster::RANGE:
+        ASSERT(0 && "Range clusters should already be handled");
+    default:
+        ASSERT(0 && "Unhandled cluster kind");
+    }
+}
+
+void BeamModuleAssembler::adv_select_build_jump_table(
+        SelectBuilder &sb,
+        const SelectBuilder::Cluster &c) {
+    ASSERT(c.kind == SelectBuilder::Cluster::JUMP_TABLE);
+    comment("Jump table for %u %u", c.low, c.high);
+
+    SelectBuilder::JumpTable &jt = sb.get_jump_table(c.jump_table_idx);
+    ASSERT(jt.size() == c.high - c.low + 1);
+    Label data = embed_labels_rodata(jt);
+
+    if (c.low != 0) {
+        if (Support::isInt32((Sint)c.low)) {
+            a.sub(ARG1, imm(c.low));
+        } else {
+            a.mov(ARG2, imm(c.low));
+            a.sub(ARG1, ARG2);
+        }
+    }
+
+    a.lea(RET, x86::qword_ptr(data));
+    a.jmp(x86::qword_ptr(RET, ARG1, 3));
+}
+void BeamModuleAssembler::adv_select_build_search_table(
+        SelectBuilder &sb,
+        const SelectBuilder::Cluster &c) {
+    ASSERT(c.kind == SelectBuilder::Cluster::SEARCH_TABLE);
+
+    SelectBuilder::SearchTableValues &vs =
+            sb.get_search_table_values(c.search_table_idx);
+    SelectBuilder::SearchTableDests &ds =
+            sb.get_search_table_dests(c.search_table_idx);
+    ASSERT(vs.size() == ds.size() && ds.size() <= (c.high - c.low + 1));
+
+    if (vs.size() < 10) {
+        comment("Linear search for %u %u", c.low, c.high);
+        // Small table, so just emit a linear search
+        for (unsigned i = 0; i < vs.size(); i++) {
+            if (Support::isInt32((Sint)vs[i])) {
+                a.cmp(ARG1, imm(vs[i]));
+            } else {
+                a.mov(ARG2, imm(vs[i]));
+                a.cmp(ARG1, ARG2);
+            }
+            a.je(labels[ds[i]]);
+        }
+        a.jmp(labels[sb.get_default_dest()]);
+        return;
+    }
+    comment("Search table for %u %u", c.low, c.high);
+
+    Label table_start = a.newLabel();
+    a.section(rodata);
+    a.bind(table_start);
+    a.align(kAlignData, 8);
+    a.embed(vs.data(), sizeof(vs[0]) * vs.size());
+    for (unsigned i = 0; i < ds.size(); i++)
+        a.embedLabel(labels[ds[i]]);
+    a.section(code.textSection());
+    mov_imm(ARG2, ds.size());
+    a.lea(ARG3, x86::qword_ptr(table_start));
+    safe_fragment_call(ga->get_i_select_val_bins_shared());
+    a.jz(labels[sb.get_default_dest()]);
+    a.jmp(x86::qword_ptr(RET));
 }
