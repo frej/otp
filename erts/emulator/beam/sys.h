@@ -348,6 +348,7 @@ __decl_noreturn void __noreturn erl_assert_error(const char* expr, const char *f
 **        enough to hold the return value of the signed_val() macro.
 ** UWord: An unsigned integer at least as large as a void * and also as large
 **          or larger than an Eterm
+** UWordNA: An UWord but without the alignment requirements of an UWord
 ** SWord: A signed integer at least as large as a void * and also as large
 **          or larger than an Eterm
 ** Uint32: An unsigned integer of 32 bits exactly
@@ -382,6 +383,7 @@ __decl_noreturn void __noreturn erl_assert_error(const char* expr, const char *f
 typedef unsigned long Eterm erts_align_attribute(sizeof(long));
 typedef unsigned long Uint  erts_align_attribute(sizeof(long));
 typedef long          Sint  erts_align_attribute(sizeof(long));
+typedef unsigned long UWordNA;
 #define SWORD_CONSTANT(Const) Const##L
 #define UWORD_CONSTANT(Const) Const##UL
 #define ERTS_UWORD_MAX ULONG_MAX
@@ -393,6 +395,7 @@ typedef long          Sint  erts_align_attribute(sizeof(long));
 typedef unsigned int Eterm erts_align_attribute(sizeof(int));
 typedef unsigned int Uint  erts_align_attribute(sizeof(int));
 typedef int          Sint  erts_align_attribute(sizeof(int));
+typedef unsigned int UWordNA;
 #define SWORD_CONSTANT(Const) Const
 #define UWORD_CONSTANT(Const) Const##U
 #define ERTS_UWORD_MAX UINT_MAX
@@ -404,6 +407,7 @@ typedef int          Sint  erts_align_attribute(sizeof(int));
 typedef unsigned long long Eterm erts_align_attribute(sizeof(long long));
 typedef unsigned long long Uint  erts_align_attribute(sizeof(long long));
 typedef long long          Sint  erts_align_attribute(sizeof(long long));
+typedef unsigned long long UWordNA;
 #define SWORD_CONSTANT(Const) Const##LL
 #define UWORD_CONSTANT(Const) Const##ULL
 #define ERTS_UWORD_MAX ULLONG_MAX
