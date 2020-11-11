@@ -1198,6 +1198,9 @@ extern int erts_compat_rel;
 #ifdef BEAMASM
 extern int erts_asm_dump;
 extern int erts_adv_select;
+extern unsigned erts_adv_select_jt_max;
+extern unsigned erts_adv_select_jt_min;
+extern unsigned erts_adv_select_jt_density;
 #endif
 
 void erl_start(int, char**);

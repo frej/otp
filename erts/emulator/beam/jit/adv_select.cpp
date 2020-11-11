@@ -109,8 +109,8 @@ UWord SelectBuilder::get_jump_table_num_cases(const TotalCasesVec &total_cases,
 }
 
 bool SelectBuilder::is_suitable_for_jump_table(UWord num_cases, UWord range) {
-    const UWord min_density = 80;  // In percent
-    const UWord max_jt_size = 128; // ERTS_UWORD_MAX;
+    const UWord min_density = erts_adv_select_jt_density;  // In percent
+    const UWord max_jt_size = erts_adv_select_jt_max;
 
     return range <= max_jt_size && (num_cases * 100 >= range * min_density);
 }
@@ -197,7 +197,7 @@ void SelectBuilder::dump(std::ostream &os, std::string label) {
 void SelectBuilder::find_jump_tables(const std::vector<ArgVal> &args) {
     ASSERT(args.size() > 2);
 
-    const unsigned min_jt_entries = 6; // XXXX
+    const unsigned min_jt_entries = erts_adv_select_jt_min;
     const unsigned small_num_entries = min_jt_entries / 2;
 
     UWord low = unsigned_val(args[0].getValue()), high = low;

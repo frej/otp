@@ -202,6 +202,9 @@ int erts_no_line_info = 0;	/* -L: Don't load line information */
 #ifdef BEAMASM
 int erts_asm_dump = 0;		/* -asmdump: Dump assembly code */
 int erts_adv_select = 0;	/* -advselect: Use advanced selects */
+unsigned erts_adv_select_jt_max = 128; /* +advselect_jt_min<count> */
+unsigned erts_adv_select_jt_min = 6; /* +advselect_jt_min<count> */
+unsigned erts_adv_select_jt_density = 60; /* +advselect_jt_density<percent> */
 #endif
 
 /*
@@ -2120,6 +2123,26 @@ erl_start(int argc, char **argv)
 	    }
 	    if (strcmp(argv[i]+2, "dvselect") == 0) {
 		erts_adv_select = 1;
+		break;
+	    }
+            if (has_prefix("dvselect_jt_max", argv[i]+2)) {
+                arg = argv[i]+17;
+                erts_adv_select_jt_max = atoi(arg);
+		break;
+	    }
+            if (has_prefix("dvselect_jt_min", argv[i]+2)) {
+                arg = argv[i]+17;
+                erts_adv_select_jt_min = atoi(arg);
+		break;
+	    }
+            if (has_prefix("dvselect_jt_density", argv[i]+2)) {
+                arg = argv[i]+21;
+                erts_adv_select_jt_density = atoi(arg);
+                if (erts_adv_select_jt_density > 100) {
+                    erts_fprintf(stderr, "bad jump table density: %s\n",
+                                 arg);
+                    erts_usage();
+                }
 		break;
 	    }
 #endif
