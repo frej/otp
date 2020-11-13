@@ -205,6 +205,7 @@ int erts_adv_select = 0;	/* -advselect: Use advanced selects */
 unsigned erts_adv_select_jt_max = 128; /* +advselect_jt_min<count> */
 unsigned erts_adv_select_jt_min = 6; /* +advselect_jt_min<count> */
 unsigned erts_adv_select_jt_density = 60; /* +advselect_jt_density<percent> */
+int  erts_adv_select_no_st = 0; /* +advselect_no_st */
 #endif
 
 /*
@@ -2145,6 +2146,11 @@ erl_start(int argc, char **argv)
                 }
 		break;
 	    }
+            if (strcmp(argv[i]+2, "dvselect_no_st") == 0) {
+		erts_adv_select_no_st = 1;
+		break;
+	    }
+
 #endif
 	    /* suggested stack size (Kilo Words) for threads in thread pool */
 	    arg = get_arg(argv[i]+2, argv[i+1], &i);
