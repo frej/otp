@@ -59,6 +59,7 @@ public:
     typedef std::vector<SearchTableDest> SearchTableDests;
 
     UWord default_dest;
+    bool is_atoms_only;
 
     ClusterVec clusters;
     JumpTableVec jump_tables;
@@ -132,6 +133,7 @@ public:
 #endif /* DEBUG_ADV_SELECT */
 
 private:
+    UWord untag(UWord tagged);
     UWord get_jump_table_range(UWord first, UWord last);
     UWord get_jump_table_num_cases(const TotalCasesVec &total_cases,
                                    UWord first,
@@ -176,6 +178,10 @@ public:
     }
     SearchTableDests &get_search_table_dests(unsigned idx) {
         return search_table_dests[idx];
+    }
+
+    bool atoms_only() {
+        return is_atoms_only;
     }
 };
 

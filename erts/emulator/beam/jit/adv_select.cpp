@@ -200,18 +200,18 @@ void SelectBuilder::find_jump_tables(const std::vector<ArgVal> &args) {
     const unsigned min_jt_entries = erts_adv_select_jt_min;
     const unsigned small_num_entries = min_jt_entries / 2;
 
-    UWord low = unsigned_val(args[0].getValue()), high = low;
+    UWord low = untag(args[0].getValue()), high = low;
     BeamInstr dest = args[1].getValue();
 
     for (size_t i = 2; i < args.size(); i += 2) {
         if (dest == args[i + 1].getValue() &&
-            high + 1 == unsigned_val(args[i].getValue())) {
+            high + 1 == untag(args[i].getValue())) {
             /* The current range can be expanded */
             high++;
         } else {
             /* The current cluster cannot be expanded further */
             clusters.push_back(Cluster::Range(low, high, dest));
-            low = unsigned_val(args[i].getValue());
+            low = untag(args[i].getValue());
             high = low;
             dest = args[i + 1].getValue();
         }
@@ -405,7 +405,18 @@ void SelectBuilder::fill_gaps() {
 
 SelectBuilder::SelectBuilder(UWord default_dest,
                              const std::vector<ArgVal> &args)
-        : default_dest(default_dest) {
+        : default_dest(default_dest),
+          is_atoms_only(is_atom(args[0].getValue())) {
+#ifdef DEBUG
+    // Check that atoms are sorted
+    if (is_atoms_only) {
+        uint64_t last = args[0].getValue();
+        for (unsigned i = 0; i < args.size(); i += 2) {
+            ASSERT(last <= args[i].getValue());
+        }
+    }
+#endif /* DEBUG */
+
 #ifdef DEBUG_ADV_SELECT
     std::cerr << "==== Raw ====\n\r"
               << "default: " << default_dest << "\n\r";
@@ -421,4 +432,8 @@ SelectBuilder::SelectBuilder(UWord default_dest,
     dump(std::cerr, "After building search tables");
     fill_gaps();
     dump(std::cerr, "After filling gaps");
+}
+
+UWord SelectBuilder::untag(UWord tagged) {
+    return is_atoms_only ? atom_val(tagged) : unsigned_val(tagged);
 }

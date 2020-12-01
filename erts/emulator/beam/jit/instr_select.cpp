@@ -339,15 +339,26 @@ void BeamModuleAssembler::emit_i_adv_jump_on_val(
         const std::vector<ArgVal> &args) {
     SelectBuilder sb(Fail.getValue(), args);
 
-    /* Check that the argument is a small integer */
     mov_arg(ARG1, Src);
     a.mov(RETd, ARG1d);
-    a.and_(RETb, imm(_TAG_IMMED1_MASK));
-    a.cmp(RETb, imm(_TAG_IMMED1_SMALL));
+
+    uint8_t mask_size;
+    if (!sb.atoms_only()) {
+        /* Check that the argument is a small integer */
+        a.and_(RETb, imm(_TAG_IMMED1_MASK));
+        a.cmp(RETb, imm(_TAG_IMMED1_SMALL));
+        mask_size = _TAG_IMMED1_SIZE;
+    } else {
+        /* Check that the argument is an atom */
+        a.and_(RETb, imm(_TAG_IMMED2_MASK));
+        a.cmp(RETb, imm(_TAG_IMMED2_ATOM));
+        mask_size = _TAG_IMMED2_SIZE;
+    }
+    /* Branch to the fail label if the tag isn't what we expected */
     a.jne(labels[Fail.getValue()]);
 
     /* Move the raw untagged value into ARG1 */
-    a.shr(ARG1, imm(_TAG_IMMED1_SIZE));
+    a.shr(ARG1, imm(mask_size));
 
     adv_select_build(sb, 0, sb.get_clusters().size() - 1, Label());
 }

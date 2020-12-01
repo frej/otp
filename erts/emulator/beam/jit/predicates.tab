@@ -117,12 +117,16 @@ pred.consecutive_words(S1, D1, S2, D2) {
 // Test whether an advanced jump table can be used.
 pred.use_adv_jump_tab(Size, Rest, MinSize) {
     Sint i;
+    int type;
 
     if (Size.val < 2 * MinSize || Size.val % 2 != 0)
         return 0;
 
+    type = Rest[0].type;
+    if (type != TAG_i && type != TAG_a)
+	return 0;
     for (i = 0; i < Size.val; i += 2)
-        if (Rest[i].type != TAG_i || Rest[i+1].type != TAG_f)
+        if (Rest[i].type != type || Rest[i+1].type != TAG_f)
             return 0;
 
     return erts_adv_select;

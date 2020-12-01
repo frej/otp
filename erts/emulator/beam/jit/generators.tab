@@ -520,15 +520,18 @@ gen.allocate_heap_zero(Ns, Nh, Live) {
 gen.adv_jump_tab(Src, Fail, Size, Rest) {
     Sint i;
     Sint arity;
-    int fixed_args, noof_choices = 0, dst = 0;
+    int fixed_args, noof_choices = 0, dst = 0, type;
     BeamOp* op;
     BeamOpArg *tmp;
 
     ASSERT(Size.val >= 2 && Size.val % 2 == 0);
     ASSERT(Fail.type == TAG_f);
 
+    type = Rest[0].type;
+    ASSERT(type == TAG_i || type == TAG_a);
+
     for (i = 0; i < Size.val; i += 2) {
-        ASSERT(Rest[i].type == TAG_i && Rest[i+1].type == TAG_f);
+        ASSERT(Rest[i].type == type && Rest[i+1].type == TAG_f);
 
 	/* Check if we have any values going to the fail label.
 	   XXXX Is this already guaranteed by the compiler?  */
