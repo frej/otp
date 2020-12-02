@@ -206,6 +206,7 @@ unsigned erts_adv_select_jt_max = 128; /* +advselect_jt_min<count> */
 unsigned erts_adv_select_jt_min = 6; /* +advselect_jt_min<count> */
 unsigned erts_adv_select_jt_density = 60; /* +advselect_jt_density<percent> */
 int  erts_adv_select_no_st = 0; /* +advselect_no_st */
+int erts_adv_select_no_jt = 0;	/* +advselect_no_jt: No jump tables */
 #endif
 
 /*
@@ -2148,6 +2149,10 @@ erl_start(int argc, char **argv)
 	    }
             if (strcmp(argv[i]+2, "dvselect_no_st") == 0) {
 		erts_adv_select_no_st = 1;
+		break;
+	    }
+            if (strcmp(argv[i]+2, "dvselect_no_jt") == 0) {
+		erts_adv_select_no_jt = 1;
 		break;
 	    }
 

@@ -1202,6 +1202,7 @@ extern unsigned erts_adv_select_jt_max;
 extern unsigned erts_adv_select_jt_min;
 extern unsigned erts_adv_select_jt_density;
 extern int erts_adv_select_no_st;
+extern int erts_adv_select_no_jt;
 #endif
 
 void erl_start(int, char**);
