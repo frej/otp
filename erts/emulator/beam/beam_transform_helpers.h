@@ -21,6 +21,8 @@
 #ifndef __BEAM_TRANSFORM_HELPERS__
 #define __BEAM_TRANSFORM_HELPERS__
 
+extern int erts_adv_select_no_jt;
+
 int beam_load_safe_mul(UWord a, UWord b, UWord* resp);
 int beam_load_map_key_sort(LoaderState* stp, BeamOpArg Size, BeamOpArg* Rest);
 Eterm beam_load_get_term(LoaderState* stp, BeamOpArg Key);

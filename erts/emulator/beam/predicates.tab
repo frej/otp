@@ -53,6 +53,8 @@ pred.use_jump_tab(Size, Rest, MinSize) {
         }
     }
 
+    if (erts_adv_select_no_jt)
+        return 0;
     return max - min <= Size.val;
 }
 
