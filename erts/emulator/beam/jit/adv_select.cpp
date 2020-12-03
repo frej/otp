@@ -368,10 +368,12 @@ void SelectBuilder::find_search_tables() {
                 values.emplace_back(clusters[i].low);
                 dests.emplace_back(clusters[i].dest);
             }
-            clusters[dst_idx++] =
-                    Cluster::SearchTable(clusters[first].low,
-                                         clusters[last].high,
-                                         search_table_dests.size());
+            bool is_rightmost_cluster = last == (clusters.size() - 1);
+            bool is_leftmost_cluster = first == 0;
+            clusters[dst_idx++] = Cluster::SearchTable(
+                    is_leftmost_cluster ? 0 : clusters[first].low,
+                    is_rightmost_cluster ? ERTS_UWORD_MAX : clusters[last].high,
+                    search_table_dests.size());
             search_table_values.push_back(values);
             search_table_dests.push_back(dests);
         } else {

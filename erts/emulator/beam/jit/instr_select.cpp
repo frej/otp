@@ -415,7 +415,7 @@ void BeamModuleAssembler::adv_select_build_search_table(
             sb.get_search_table_values(c.search_table_idx);
     SelectBuilder::SearchTableDests &ds =
             sb.get_search_table_dests(c.search_table_idx);
-    ASSERT(vs.size() == ds.size() && ds.size() <= (c.high - c.low + 1));
+    ASSERT(vs.size() == ds.size());
 
     if (vs.size() < 10) {
         comment("Linear search for %u %u", c.low, c.high);
