@@ -109,7 +109,7 @@ UWord SelectBuilder::get_jump_table_num_cases(const TotalCasesVec &total_cases,
 }
 
 bool SelectBuilder::is_suitable_for_jump_table(UWord num_cases, UWord range) {
-    const UWord min_density = erts_adv_select_jt_density;  // In percent
+    const UWord min_density = erts_adv_select_jt_density; // In percent
     const UWord max_jt_size = erts_adv_select_jt_max;
 
     if (erts_adv_select_no_jt)
