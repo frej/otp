@@ -431,7 +431,7 @@ SelectBuilder::SelectBuilder(UWord default_dest,
 
 #endif /* DEBUG_ADV_SELECT */
     find_jump_tables(args);
-    dump(std::cerr, "Before building jump tables");
+    dump(std::cerr, "After building jump tables");
     if (!erts_adv_select_no_st)
         find_search_tables();
     dump(std::cerr, "After building search tables");
