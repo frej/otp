@@ -278,7 +278,7 @@ void BeamModuleAssembler::adv_select_build(SelectBuilder &sb,
     unsigned s = adv_select_split(sb, left, right);
 
     comment("Compare input to %ld", cs[s + 1].low);
-    UWord pivot = cs[s + 1].low;
+    UWord pivot = sb.tag(cs[s + 1].low);
     if (Support::isInt32((Sint)pivot)) {
         a.cmp(ARG1, imm(pivot));
     } else {
@@ -340,26 +340,6 @@ void BeamModuleAssembler::emit_i_adv_jump_on_val(
     SelectBuilder sb(Fail.getValue(), args);
 
     mov_arg(ARG1, Src);
-    a.mov(RETd, ARG1d);
-
-    uint8_t mask_size;
-    if (!sb.atoms_only()) {
-        /* Check that the argument is a small integer */
-        a.and_(RETb, imm(_TAG_IMMED1_MASK));
-        a.cmp(RETb, imm(_TAG_IMMED1_SMALL));
-        mask_size = _TAG_IMMED1_SIZE;
-    } else {
-        /* Check that the argument is an atom */
-        a.and_(RETb, imm(_TAG_IMMED2_MASK));
-        a.cmp(RETb, imm(_TAG_IMMED2_ATOM));
-        mask_size = _TAG_IMMED2_SIZE;
-    }
-    /* Branch to the fail label if the tag isn't what we expected */
-    a.jne(labels[Fail.getValue()]);
-
-    /* Move the raw untagged value into ARG1 */
-    a.shr(ARG1, imm(mask_size));
-
     adv_select_build(sb, 0, sb.get_clusters().size() - 1, Label());
 }
 
@@ -394,6 +374,25 @@ void BeamModuleAssembler::adv_select_build_jump_table(
     ASSERT(jt.size() == c.high - c.low + 1);
     Label data = embed_labels_rodata(jt);
 
+    a.mov(RETd, ARG1d);
+    uint8_t mask_size;
+    if (!sb.atoms_only()) {
+        /* Check that the argument is a small integer */
+        a.and_(RETb, imm(_TAG_IMMED1_MASK));
+        a.cmp(RETb, imm(_TAG_IMMED1_SMALL));
+        mask_size = _TAG_IMMED1_SIZE;
+    } else {
+        /* Check that the argument is an atom */
+        a.and_(RETb, imm(_TAG_IMMED2_MASK));
+        a.cmp(RETb, imm(_TAG_IMMED2_ATOM));
+        mask_size = _TAG_IMMED2_SIZE;
+    }
+    /* Branch to the fail label if the tag isn't what we expected */
+    a.jne(labels[sb.get_default_dest()]);
+
+    /* Move the raw untagged value into ARG1 */
+    a.shr(ARG1, imm(mask_size));
+
     if (c.low != 0) {
         if (Support::isInt32((Sint)c.low)) {
             a.sub(ARG1, imm(c.low));
@@ -416,6 +415,9 @@ void BeamModuleAssembler::adv_select_build_search_table(
     SelectBuilder::SearchTableDests &ds =
             sb.get_search_table_dests(c.search_table_idx);
     ASSERT(vs.size() == ds.size());
+
+    for (auto &v : vs)
+        v = sb.tag(v);
 
     if (vs.size() < 10) {
         comment("Linear search for %u %u", c.low, c.high);
