@@ -439,6 +439,10 @@ SelectBuilder::SelectBuilder(UWord default_dest,
     dump(std::cerr, "After filling gaps");
 }
 
+UWord SelectBuilder::tag(UWord untagged) {
+    return is_atoms_only ? make_atom(untagged) : make_small(untagged);
+}
+
 UWord SelectBuilder::untag(UWord tagged) {
     return is_atoms_only ? atom_val(tagged) : unsigned_val(tagged);
 }

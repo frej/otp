@@ -183,6 +183,8 @@ public:
     bool atoms_only() {
         return is_atoms_only;
     }
+
+    UWord tag(UWord tagged);
 };
 
 std::ostream &operator<<(std::ostream &os, const SelectBuilder::Cluster &c);
