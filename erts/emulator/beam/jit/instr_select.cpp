@@ -275,7 +275,47 @@ void BeamModuleAssembler::adv_select_build(SelectBuilder &sb,
         adv_select_build_cluster(sb, left);
         return;
     }
+    // If there is only a single range leading to a non-default
+    // destination check for it.
+    unsigned non_default = 0, defaults = 0, others = 0;
+    for (unsigned i = left; i <= right; i++) {
+        if (cs[i].kind == SelectBuilder::Cluster::RANGE &&
+            cs[i].low == cs[i].high && cs[i].dest != sb.default_dest)
+            non_default++;
+        else if (cs[i].dest == sb.default_dest)
+            defaults++;
+        else
+            others++;
+    }
+    comment("non-default: %u default: %u, other: %u",
+            non_default,
+            defaults,
+            others);
     unsigned s = adv_select_split(sb, left, right);
+    comment("split  l: %ld r: %ld size: %ld, split: %d",
+            left,
+            right,
+            cs.size(),
+            s);
+
+    if (non_default == 1 && others == 0) {
+        comment("Short circuit");
+        for (unsigned i = left; i <= right; i++) {
+            if (cs[i].kind == SelectBuilder::Cluster::RANGE &&
+                cs[i].low == cs[i].high && cs[i].dest != sb.default_dest) {
+                UWord v = sb.tag(cs[i].low);
+                if (Support::isInt32((Sint)v)) {
+                    a.cmp(ARG1, imm(v));
+                } else {
+                    a.mov(ARG2, imm(v));
+                    a.cmp(ARG1, ARG2);
+                }
+                a.je(labels[cs[i].dest]);
+            }
+        }
+        a.jmp(labels[sb.get_default_dest()]);
+        return;
+    }
 
     comment("Compare input to %ld", cs[s + 1].low);
     UWord pivot = sb.tag(cs[s + 1].low);
