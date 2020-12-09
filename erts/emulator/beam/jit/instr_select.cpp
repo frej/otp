@@ -298,7 +298,7 @@ void BeamModuleAssembler::adv_select_build(SelectBuilder &sb,
             cs.size(),
             s);
 
-    if (non_default >= 1 && non_default < 5 && others == 0) {
+    if (non_default >= 1 && non_default < 10 && others == 0) {
         comment("Short circuit");
         for (unsigned i = left; i <= right; i++) {
             if (cs[i].kind == SelectBuilder::Cluster::RANGE &&
