@@ -115,6 +115,9 @@ bool SelectBuilder::is_suitable_for_jump_table(UWord num_cases, UWord range) {
     if (erts_adv_select_no_jt)
         return false;
 
+    if (num_cases < 5)
+        return false;
+
     return range <= max_jt_size && (num_cases * 100 >= range * min_density);
 }
 
