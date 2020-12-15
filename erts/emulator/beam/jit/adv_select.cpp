@@ -115,7 +115,7 @@ bool SelectBuilder::is_suitable_for_jump_table(UWord num_cases, UWord range) {
     if (erts_adv_select_no_jt)
         return false;
 
-    if (num_cases < 5)
+    if (num_cases < 10)
         return false;
 
     return range <= max_jt_size && (num_cases * 100 >= range * min_density);
@@ -237,6 +237,9 @@ void SelectBuilder::find_jump_tables(const std::vector<ArgVal> &args) {
     UWord num_cases = get_jump_table_num_cases(total_cases, 0, n - 1);
     ASSERT(num_cases < ERTS_UWORD_MAX / 100);
     ASSERT(range >= num_cases);
+
+    if (num_cases < 10)
+        return; // Don't do any fancy analysis for small selects
 
     if (is_suitable_for_jump_table(num_cases, range)) {
         Cluster jt_cluster;
