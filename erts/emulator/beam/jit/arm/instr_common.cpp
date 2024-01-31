@@ -997,7 +997,7 @@ void BeamModuleAssembler::emit_update_record_in_place(
         const ArgRegister &Dst,
         const ArgWord &UpdateCount,
         const Span<ArgVal> &updates) {
-    bool all_safe = true;
+    bool all_safe = false;
     ArgSource maybe_immediate = ArgNil();
     const size_t size_on_heap = TupleSize.get() + 1;
 
@@ -1008,6 +1008,8 @@ void BeamModuleAssembler::emit_update_record_in_place(
 
     auto destination = init_destination(Dst, ARG1);
     auto src = load_source(Src, ARG2);
+
+    a.mov(ARG6, src.reg);
 
     a64::Gp untagged_src = ARG3;
     emit_untag_ptr(untagged_src, src.reg);
@@ -1041,10 +1043,9 @@ void BeamModuleAssembler::emit_update_record_in_place(
         a.ccmp(untagged_src, ARG4, imm(NZCV::kNone), imm(arm::CondCode::kLO));
         a.b_hs(update);
 
+        a.bind(update);
         emit_copy_words_increment(untagged_src, HTOP, size_on_heap);
         sub(untagged_src, HTOP, size_on_heap * sizeof(Eterm));
-
-        a.bind(update);
     }
 
     for (size_t i = 0; i < updates.size(); i += 2) {
@@ -1094,6 +1095,14 @@ void BeamModuleAssembler::emit_update_record_in_place(
         a.bind(pointer_ok);
     }
 #endif
+    emit_enter_runtime_frame();
+    emit_enter_runtime();
+
+    a.mov(ARG1, ARG6);
+    runtime_call<1>(erts_poison_term);
+
+    emit_leave_runtime();
+    emit_leave_runtime_frame();
 }
 
 void BeamModuleAssembler::emit_set_tuple_element(const ArgSource &Element,
