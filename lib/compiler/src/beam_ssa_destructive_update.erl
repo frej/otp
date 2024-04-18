@@ -37,7 +37,10 @@
 %%     bs_writable_binary. Likewise an update_record instruction
 %%     returning a result which is input to a another update_record
 %%     instruction with the inplace hint, cannot have the reuse hint,
-%%     as then there are no guarantees for a unique value.
+%%     as then there are no guarantees for a unique value. Literal
+%%     tuples do not need to be moved to the heap as a write barrier
+%%     in update_record will ensure that in-place updated records are
+%%     on the heap.
 %%
 %%     Identifying such terms, instructions and literals is done by
 %%     find_initial_values/3.
@@ -83,9 +86,6 @@
 %%     the alias analysis pass. During the patching phase these
 %%     instructions are given the `inplace` hint.
 %%
-%%     During initial-value-search literal tuples are detected and
-%%     during the patching phase rewritten to be created using
-%%     put_tuple as literals cannot be updated in-place.
 
 -module(beam_ssa_destructive_update).
 -moduledoc false.
@@ -680,8 +680,6 @@ fiv_are_lit_and_element_compatible(Lit, Element) ->
         {tuple_element,Idx,E,_}
           when is_tuple(Lit), erlang:tuple_size(Lit) > Idx ->
             fiv_are_lit_and_element_compatible(erlang:element(Idx + 1, Lit), E);
-        {self,heap_tuple} ->
-            is_tuple(Lit);
         {self,init_writable} ->
             is_bitstring(Lit);
         {hd,E,_} when is_list(Lit), (Lit =/= []) ->
@@ -795,18 +793,11 @@ patch_ret(Last=#b_ret{arg=#b_literal{val=Lit}}, Patches, Cnt0) ->
     {Last#b_ret{arg=V}, Extra, Cnt}.
 
 %% Aggregate patches to a ret instruction to produce a single patch.
-aggregate_ret_patches([R={self,heap_tuple}]) ->
-    R;
 aggregate_ret_patches([R={self,init_writable}]) ->
     R;
 aggregate_ret_patches([{tuple_element,I,E,_}|Rest]) ->
     Elements = [{I,E}|aggregate_ret_patches_tuple(Rest)],
     {tuple_elements,Elements};
-aggregate_ret_patches([{self,heap_tuple},TE={tuple_element,_,_,_}|Rest]) ->
-    %% As the tuple_element will force the outer aggregate onto the
-    %% heap, the {self,heap_tuple} can be dropped. Due to the sort in
-    %% patch_ret/3, self will always occur before tuple_element.
-    aggregate_ret_patches([TE|Rest]);
 aggregate_ret_patches([R={hd,_,_}]) ->
     R.
 
@@ -838,18 +829,14 @@ patch_opargs([], [], _, PatchedArgs, Is, Cnt) ->
 %% The way find_initial_values work, we can end up with multiple
 %% patches patching different parts of a tuple or pair. We merge them
 %% here.
-merge_arg_patches([{Idx,Lit,P0},{Idx,Lit,P1}=Next|Patches]) ->
+merge_arg_patches([{Idx,Lit,P0},{Idx,Lit,P1}|Patches]) ->
     case {P0, P1} of
         {{tuple_element,I0,E0,_},{tuple_element,I1,E1,_}} ->
             P = {tuple_elements,[{I0,E0},{I1,E1}]},
             merge_arg_patches([{Idx,Lit,P}|Patches]);
         {{tuple_elements,Es},{tuple_element,I,E,_}} ->
             P = {tuple_elements,[{I,E}|Es]},
-            merge_arg_patches([{Idx,Lit,P}|Patches]);
-        {{self,heap_tuple},_} ->
-            %% P0 forces this argument onto the heap, as P1 patches
-            %% something inside the same tuple, First can be dropped.
-            merge_arg_patches([Next|Patches])
+            merge_arg_patches([{Idx,Lit,P}|Patches])
     end;
 merge_arg_patches([P|Patches]) ->
     [P|merge_arg_patches(Patches)];
@@ -881,12 +868,6 @@ patch_literal_term(Tuple, {tuple_elements,Elems}, Cnt) ->
     patch_literal_tuple(Tuple, Es, Cnt);
 patch_literal_term(Tuple, E={tuple_element,_,_,_}, Cnt) ->
     patch_literal_tuple(Tuple, [E], Cnt);
-patch_literal_term(Tuple, {self,heap_tuple}, Cnt0) ->
-    %% Build the tuple on the heap.
-    {V,Cnt} = new_var(Cnt0),
-    I = #b_set{op=put_tuple,dst=V,
-               args=[#b_literal{val=E} || E <- tuple_to_list(Tuple)]},
-    {V,[I],Cnt};
 patch_literal_term(<<>>, {self,init_writable}, Cnt0) ->
     {V,Cnt} = new_var(Cnt0),
     I = #b_set{op=bs_init_writable,dst=V,args=[#b_literal{val=256}]},
