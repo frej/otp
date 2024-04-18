@@ -22,11 +22,9 @@
 
 -export([do0a/0, do0b/2, different_sizes/2, ambiguous_inits/1,
          update_record0/0, fc/0, track_update_record/1,
-         gh8124_a/0, gh8124_b/0]).
+         force_copy_combined_with_patch/1, patch_retval_hd/0]).
 
 -record(r, {a=0,b=0,c=0,tot=0}).
--record(r1, {a}).
--record(r2, {b}).
 
 do0a() ->
     Ls = ex:f(),
@@ -50,8 +48,8 @@ r0([{Key,Val}|Updates], Acc=#r{a=A,b=B,c=C,tot=T}) ->
 r0([], Acc) ->
     Acc.
 
-%% Check that that the literal returned by make_ds(a) is rewritten to
-%% a put_tuple but the result of make_ds(b) is left alone.
+%% Check that that the literal returned by make_ds(a) is not rewritten
+%% to a put_tuple and that the result of make_ds(b) is left alone.
 -record(ds,{a}).
 
 make_ds(a) ->
@@ -60,9 +58,7 @@ make_ds(a) ->
 %ssa% label IsB,
 %ssa% ret({0,0}),
 %ssa% label IsA,
-%ssa% Rec = put_tuple(ds, 0),
-%ssa% Tuple = put_tuple(0, 0, Rec),
-%ssa% ret(Tuple).
+%ssa% ret({0, 0, {ds, 0}}).
     {0,0,#ds{a=0}};
 make_ds(b) ->
     {0,0}.
@@ -84,8 +80,8 @@ work_ds([], Acc) ->
 different_sizes(L, K) ->
     {work_ds(L, make_ds(K)), work_ds(L, make_ds(K))}.
 
-%% Check that both branches of ambiguous_make/1 are converted into
-%% heap tuples.
+%% Check that we don't needlessly convert the literal in the second
+%% clause of ambiguous_make/1 to a put_tuple, something we used to do.
 -record(ar,{f}).
 
 make_int() ->
@@ -99,8 +95,7 @@ ambiguous_make(a) ->
 %ssa% IsB = bif:'=:='(X, b),
 %ssa% br(IsB, BLbl, ALbl),
 %ssa% label BLbl,
-%ssa% R0 = put_tuple(...),
-%ssa% ret(R0),
+%ssa% ret({ar,5}),
 %ssa% label ALbl,
 %ssa% R1 = put_tuple(...),
 %ssa% ret(R1).
@@ -167,18 +162,14 @@ track_update_record(#outer{a=A}=Outer) ->
 %ssa% (A0) when post_ssa_opt ->
 %ssa% switch(X, _, [{0,Zero},{1,One},{2,Two},{3,Three},{4,Four}]),
 %ssa% label Four,
-%ssa% LitInner4 = put_tuple(inner, undefined, undefined, undefined),
-%ssa% LitOuter40 = update_record(copy, 3, A0, 3, _, 2, LitInner4),
+%ssa% LitOuter40 = update_record(copy, 3, A0, 3, _, 2, {inner,undefined,undefined,undefined}),
 %ssa% LitOuter41 = update_record(inplace, 3, LitOuter40, 3, _),
 %ssa% _ = call(fun track_update_record1/1, LitOuter41),
 %ssa% label Three,
-%ssa% LitInner0 = put_tuple(inner, undefined, undefined, undefined),
-%ssa% LitOuter0 = update_record(copy, 3, A0, 3, _, 2, LitInner0),
+%ssa% LitOuter0 = update_record(copy, 3, A0, 3, _, 2, {inner,undefined,undefined,undefined}),
 %ssa% _ = call(fun track_update_record1/1, LitOuter0),
 %ssa% label Two,
-%ssa% LitInner1 = put_tuple(inner, c, undefined, undefined),
-%ssa% LitOuter1 = put_tuple(outer, LitInner1, b),
-%ssa% _ = call(fun track_update_record1/1, LitOuter1),
+%ssa% _ = call(fun track_update_record1/1, {outer,{inner,c,undefined,undefined},b}),
 %ssa% label One,
 %ssa% C = update_record(copy, 4, _, 2, _),
 %ssa% D = update_record(copy, 3, A0, 3, _, 2, C),
@@ -211,28 +202,42 @@ track_update_record1(#outer{a=A}=Outer) ->
     B = e:f(),
     Outer#outer{a=A#inner{d=B}}.
 
-%% Check that update patches are correctly merged when we have nested
-%% tuple updates.
-gh8124_a_inner() ->
+%% Check that the forcing of a copy for the record update in
+%% force_copy_combined_with_patch/1 works together with the patching
+%% of the empty binary.
+-record(force_copy_combined_with_patch_r, {bin}).
+
+force_copy_combined_with_patch(#force_copy_combined_with_patch_r{}=R0) ->
+%ssa% (_) when post_ssa_opt ->
+%ssa% Bin =  bs_init_writable(_),
+%ssa% Rec = update_record(copy, 2, _, 2, Bin),
+%ssa% _ = call(fun force_copy_combined_with_patch1/1, Rec).
+    R = R0#force_copy_combined_with_patch_r{bin= <<>>},
+    force_copy_combined_with_patch1(R).
+
+force_copy_combined_with_patch1(#force_copy_combined_with_patch_r{bin=Bin0}=R0)
+  when is_binary(Bin0) ->
+%ssa% (Arg) when post_ssa_opt ->
+%ssa% Bin0 = get_tuple_element(Arg, 1),
+%ssa% Bin = bs_create_bin(private_append, _, _7, ...),
+%ssa% R = update_record(inplace, 2, Arg, 2, Bin).
+    R0#force_copy_combined_with_patch_r{bin= <<Bin0/binary,1:8>>}.
+
+%% Check that the patching of a return value, when the returned value
+%% is a pair, is handled correctly.
+
+patch_retval_hd() ->
 %ssa% () when post_ssa_opt ->
-%ssa% Inner = put_tuple(r2, _),
-%ssa% Outer = put_tuple(r1, Inner),
-%ssa% ret(Outer).
-    #r1{a = #r2{b = <<"value1">>}}.
+%ssa% Pair = call(fun patch_retval_hd_inner/0),
+%ssa% Bin0 = get_hd(Pair),
+%ssa% Bin = bs_create_bin(private_append, _, Bin0, ...),
+%ssa% ret(Bin).
+    [X] = patch_retval_hd_inner(),
+    <<X/binary, 1:8>>.
 
-gh8124_a() ->
-    R1 = #r1{a=A} = gh8124_a_inner(),
-    R1#r1{a = A#r2{b= <<"new value">>}}.
-
-gh8124_b_inner() ->
+patch_retval_hd_inner() ->
 %ssa% () when post_ssa_opt ->
-%ssa% Inner = put_tuple(r, ...),
-%ssa% Lst = put_list(Inner, _),
-%ssa% ret(Lst).
-    R = #r{a = <<"value1">>},
-    [R].
-
-gh8124_b() ->
-    [R] = gh8124_b_inner(),
-    R#r{a = <<"value 2">>}.
-
+%ssa% Bin =  bs_init_writable(_),
+%ssa% Pair = put_list(Bin, []),
+%ssa% ret(Pair).
+    [<<>>].
