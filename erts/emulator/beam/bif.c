@@ -4012,6 +4012,94 @@ error: {
 void beamasm_dump_sizes(void);
 #endif
 
+static void check_literal_area(ErtsLiteralArea* lit_area)
+{
+    Eterm* htop;
+    Eterm* hend;
+
+    htop = lit_area->start;
+    hend = lit_area->end;
+
+    while (htop < hend) {
+        Eterm w = *htop;
+        Eterm term;
+        Uint size;
+
+        switch (primary_tag(w)) {
+        case TAG_PRIMARY_HEADER:
+            term = make_boxed(htop);
+
+            if (is_tuple(term)) {
+                Uint arity = arityval(w);
+                for (Uint i = 1; i <= arity; i++) {
+                    if (htop[i] == am_poison__42__poison) {
+                        erts_fprintf(stderr, "    %T\n", term);
+                        erts_fprintf(stderr, "    %d: %T\n", i, htop[i]);
+                        abort();
+                    }
+                }
+            }
+
+            size = 1 + header_arity(w);
+            switch (w & _HEADER_SUBTAG_MASK) {
+            case FUN_SUBTAG:
+                {
+                    const ErlFunThing *funp = (ErlFunThing*)htop;
+                    size += fun_env_size(funp);
+                }
+                break;
+            case MAP_SUBTAG:
+                if (is_flatmap_header(w)) {
+                    size += 1 + flatmap_get_size(htop);
+                } else {
+                    size += hashmap_bitcount(MAP_HEADER_VAL(w));
+                }
+                break;
+            }
+            break;
+        default:
+            ASSERT(!is_header(htop[1]));
+            size = 2;
+            break;
+        }
+        htop += size;
+    }
+}
+
+void check_module_literals(Module* modp);
+
+void check_module_literals(Module* modp)
+{
+    /* erts_fprintf(stderr, "  %T\n", make_atom(modp->module)); */
+    if (modp->curr.code_length > 0 &&
+        modp->curr.code_hdr->literal_area) {
+        ErtsLiteralArea* lita = modp->curr.code_hdr->literal_area;
+        check_literal_area(lita);
+    }
+    if (modp->old.code_length > 0 && modp->old.code_hdr->literal_area) {
+        ErtsLiteralArea* lita = modp->old.code_hdr->literal_area;
+        check_literal_area(lita);
+    }
+}
+
+static void check_literals(void)
+{
+    /* Check literal areas for corruption */
+    ErtsCodeIndex code_ix = erts_active_code_ix();
+    Module* modp;
+    for (int i = 0; i < ERTS_NUM_GLOBAL_LITERALS; i++) {
+        ErtsLiteralArea* area = erts_get_global_literal_area(i);
+        check_literal_area(area);
+    }
+
+    for (int i = 0; i < module_code_size(code_ix); i++) {
+        modp = module_code(i, code_ix);
+        if (modp == NULL)
+            continue;
+        check_module_literals(modp);
+    }
+}
+
 BIF_RETTYPE halt_2(BIF_ALIST_2)
 {
     Uint code;
@@ -4048,6 +4136,7 @@ BIF_RETTYPE halt_2(BIF_ALIST_2)
     if (is_not_nil(optlist))
         goto bad_options;
 
+    check_literals();
 #if defined(BEAMASM) && defined(BEAMASM_DUMP_SIZES)
     beamasm_dump_sizes();
 #endif

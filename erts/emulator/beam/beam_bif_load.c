@@ -1873,6 +1873,8 @@ finalize_purge_abort(void *unused)
 }
 
 
+extern void check_module_literals(Module* modp);
+
 BIF_RETTYPE erts_internal_purge_module_2(BIF_ALIST_2)
 {
     if (BIF_P != erts_code_purger) {
@@ -2048,6 +2050,7 @@ BIF_RETTYPE erts_internal_purge_module_2(BIF_ALIST_2)
                 /* Remove the old code. */
                 ASSERT(erts_total_code_size >= modp->old.code_length);
                 erts_total_code_size -= modp->old.code_length;
+                check_module_literals(modp);
 
                 if (purge_state.fe_count > 0) {
                     erts_fun_purge_complete(purge_state.funs,
