@@ -2993,6 +2993,7 @@ pre_load() ->
 	 beam_ssa_codegen,
 	 beam_ssa_dead,
          beam_ssa_destructive_update,
+         beam_ssa_no_reuse,
 	 beam_ssa_opt,
 	 beam_ssa_pre_codegen,
 	 beam_ssa_recv,
