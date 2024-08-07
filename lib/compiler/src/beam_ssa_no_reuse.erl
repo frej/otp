@@ -25,7 +25,7 @@
 
 -module(beam_ssa_no_reuse).
 
--import(lists, [foldl/3, reverse/1]).
+-import(lists, [foldl/3]).
 
 -export([opt/2]).
 
@@ -46,43 +46,62 @@ opt(StMap0, FuncDb0) ->
     %% called).
     Funs = [ F || F <- maps:keys(StMap0), is_map_key(F, FuncDb0)],
 
-    {StMap,_GlobalSt} =
-        foldl(fun(F, {StMapAcc,GlobalSt0}) ->
+    GlobalSt =
+        foldl(fun(F, GlobalSt0) ->
                       #{F:=OptSt0} = StMap0,
-                      {OptSt,GlobalSt} = start(F, OptSt0, GlobalSt0),
-                      {StMapAcc#{F=>OptSt},GlobalSt}
-              end, {StMap0,#{}}, Funs),
+                      start(F, OptSt0, GlobalSt0)
+              end, #{}, Funs),
+    StMap =
+        foldl(fun(F, StMapAcc) ->
+                      #{F:=OptSt0} = StMap0,
+                      OptSt = finish(F, OptSt0, GlobalSt),
+                      StMapAcc#{F=>OptSt}
+              end, StMap0, Funs),
     {StMap,FuncDb0}.
 
-start(F, #opt_st{ssa=Linear0}=OptSt, GlobalSt0) when is_list(Linear0) ->
-    {Linear,GlobalSt} = start_blks(F, Linear0, #{}, GlobalSt0, []),
-    {OptSt#opt_st{ssa=Linear},GlobalSt}.
+start(F, #opt_st{ssa=Linear0}, GlobalSt0) when is_list(Linear0) ->
+    start_blks(F, Linear0, #{}, GlobalSt0).
 
-start_blks(F, [{L,#b_blk{is=Is0}=Blk0}|Bs], St0, GlobalSt0, Acc) ->
-    {Is,St,GlobalSt} = start_is(F, Is0, St0, GlobalSt0, []),
+start_blks(F, [{_L,#b_blk{is=Is0}}|Bs], St0, GlobalSt0) ->
+    {St,GlobalSt} = start_is(F, Is0, St0, GlobalSt0),
+    start_blks(F, Bs, St, GlobalSt);
+start_blks(F, [], St, GlobalSt) ->
+    GlobalSt#{F=>St}.
+
+start_is(F, [#b_set{dst=Dst}=I|Is], St0, GlobalSt) ->
+    case inhibits_reuse(I, St0) of
+        true ->
+            start_is(F, Is, St0#{Dst=>fresh}, GlobalSt);
+        false ->
+            start_is(F, Is, St0, GlobalSt)
+    end;
+start_is(_F, [], St, GlobalSt) -> %% TODO: drop F?
+    {St,GlobalSt}.
+
+finish(F, #opt_st{ssa=Linear0}=OptSt, GlobalSt) when is_list(Linear0) ->
+    Linear = finish_blks(F, Linear0, maps:get(F, GlobalSt), GlobalSt),
+    OptSt#opt_st{ssa=Linear}.
+
+finish_blks(F, [{L,#b_blk{is=Is0}=Blk0}|Bs], St, GlobalSt) ->
+    Is = finish_is(F, Is0, St, GlobalSt),
     Blk = Blk0#b_blk{is=Is},
-    start_blks(F, Bs, St, GlobalSt, [{L,Blk}|Acc]);
-start_blks(F, [], St, GlobalSt, Blks) ->
-    {reverse(Blks),GlobalSt#{F=>St}}.
+    [{L,Blk}|finish_blks(F, Bs, St, GlobalSt)];
+finish_blks(_F, [], _St, _GlobalSt) ->
+    [].
 
-start_is(F, [#b_set{op=update_record,args=Args}=I0|Is], St, GlobalSt, Acc) ->
+finish_is(F, [#b_set{op=update_record,args=Args}=I0|Is], St, GlobalSt) ->
     [_,_,_|Updates] = Args,
     case cannot_reuse(Updates, St) of
         true ->
             I = I0#b_set{args=[#b_literal{val=copy}|tl(Args)]},
-            start_is(F, Is, St, GlobalSt, [I|Acc]);
+            [I|finish_is(F, Is, St, GlobalSt)];
         false ->
-            start_is(F, Is, St, GlobalSt, [I0|Acc])
+            [I0|finish_is(F, Is, St, GlobalSt)]
     end;
-start_is(F, [#b_set{dst=Dst}=I|Is], St0, GlobalSt, Acc) ->
-    case inhibits_reuse(I, St0) of
-        true ->
-            start_is(F, Is, St0#{Dst=>fresh}, GlobalSt, [I|Acc]);
-        false ->
-            start_is(F, Is, St0, GlobalSt, [I|Acc])
-    end;
-start_is(_F, [], St, GlobalSt, Acc) -> %% TODO: drop F?
-    {reverse(Acc),St,GlobalSt}.
+finish_is(F, [I|Is], St, GlobalSt) ->
+    [I|finish_is(F, Is, St, GlobalSt)];
+finish_is(_F, [], _St, _GlobalSt) -> %% TODO: drop F?
+    [].
 
 inhibits_reuse(#b_set{op=phi,args=Args}, St) ->
     foldl(fun({Value,_}, Bool) ->
